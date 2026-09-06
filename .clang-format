@@ -1,0 +1,18 @@
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 150
+PointerAlignment: Left
+AccessModifierOffset: -4
+
+AllowShortIfStatementsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Empty
+BreakBeforeBraces: Attach
+ConstructorInitializerIndentWidth: 4
+AllowShortCaseLabelsOnASingleLine: false
+IndentCaseLabels: true
+AlignAfterOpenBracket: DontAlign
+AlwaysBreakTemplateDeclarations: true
+Cpp11BracedListStyle: false
+SortIncludes: CaseSensitive
