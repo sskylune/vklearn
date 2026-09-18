@@ -14,5 +14,8 @@ AllowShortCaseLabelsOnASingleLine: false
 IndentCaseLabels: true
 AlignAfterOpenBracket: DontAlign
 AlwaysBreakTemplateDeclarations: true
+SpaceBeforeCpp11BracedList: true
 Cpp11BracedListStyle: false
-SortIncludes: CaseSensitive
+PackConstructorInitializers: Never
+SortIncludes: Never
+NamespaceIndentation: All

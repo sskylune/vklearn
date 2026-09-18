@@ -1,26 +1,35 @@
-#include <GLFW/glfw3.h>
+#include <app.hpp>
+
+#include <log.hpp>
+#include <spdlog/spdlog.h>
+
+class Handler : public LogHandler {
+    void message(MessageSeverity severity, std::string_view message) override {
+        switch (severity) {
+            case MessageSeverity::INFO:
+                spdlog::info(message);
+                break;
+            case MessageSeverity::WARN:
+                spdlog::warn(message);
+                break;
+            case MessageSeverity::ERROR:
+                spdlog::error(message);
+                break;
+            case MessageSeverity::FATAL:
+                spdlog::critical(message);
+                break;
+        }
+    }
+};
 
 int main() {
-    if (!glfwInit())
-        return -1;
+    Handler handler;
 
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+    App app(handler);
 
-    GLFWwindow* window = glfwCreateWindow(800, 600, "Vulkan", nullptr, nullptr);
+    if (app.init())
+        app.loop();
+    app.exit();
 
-    if (!window) {
-        glfwTerminate();
-        return -1;
-    }
-
-    glfwMakeContextCurrent(window);
-
-    while (!glfwWindowShouldClose(window)) {
-        glfwSwapBuffers(window);
-
-        glfwPollEvents();
-    }
-
-    glfwTerminate();
     return 0;
 }

@@ -1,0 +1,9 @@
+CompileFlags:
+  Add: 
+    - "--target=x86_64-w64-windows-gnu"
+    - "-isystem"
+    - "C:/msys64/clang64/include/c++/v1"
+    - "-isystem"
+    - "C:/msys64/clang64/lib/clang/22/include"
+    - "-isystem"
+    - "C:/msys64/clang64/include"
