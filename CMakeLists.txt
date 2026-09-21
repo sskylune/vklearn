@@ -10,8 +10,12 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(spdlog)
 
+# Module path for custom Find modules
+set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake ${CMAKE_MODULE_PATH})
+
 # Vulkan (for volk)
 find_package(Vulkan REQUIRED)
+find_package(Shaderc REQUIRED)
 
 # Submodules
 add_subdirectory(external/glfw)
@@ -36,6 +40,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     volk
     glfw
     GPUOpen::VulkanMemoryAllocator
+    shaderc::shaderc
 )
 
 target_compile_options(${PROJECT_NAME} PRIVATE

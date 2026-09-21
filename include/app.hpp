@@ -6,6 +6,7 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <vma/vk_mem_alloc.h>
+#include <shaderc/shaderc.hpp>
 
 #include <vector>
 
@@ -72,4 +73,11 @@ private:
 
     bool createSwapchain();
     void destroySwapchain();
+
+    // Pipeline
+    VkShaderModule createShaderModule(const std::string& filename, shaderc_shader_kind kind);
+
+    VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    bool createGraphicsPipeline();
 };

@@ -1,6 +1,7 @@
 #define VMA_IMPLEMENTATION
 #include <app.hpp>
 #include <config.hpp>
+#include <tools.hpp>
 
 bool App::init() {
     if (!glfwInit()) {
@@ -71,6 +72,40 @@ void App::exit() {
     vkDestroyInstance(instance, nullptr);
 
     glfwTerminate();
+}
+
+VkShaderModule App::createShaderModule(const std::string& filename, shaderc_shader_kind kind) {
+    std::string filepath = "src/shaders/" + filename;
+    std::string src = readTextFile(filepath);
+    if (src.empty()) {
+        log.error("Failed to create shader module. Shader source file doesn't exist.");
+        return nullptr;
+    }
+
+    shaderc::Compiler compiler;
+    shaderc::CompileOptions options;
+    options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
+    options.SetTargetSpirv(shaderc_spirv_version_1_6);
+    options.SetOptimizationLevel(shaderc_optimization_level_performance);
+    shaderc::CompilationResult res = compiler.CompileGlslToSpv(src, kind, filename.c_str(), options);
+
+    if (res.GetCompilationStatus() != shaderc_compilation_status_success) {
+        log.error("Shader compilation error: {}", res.GetErrorMessage());
+        return VK_NULL_HANDLE;
+    }
+
+    VkShaderModuleCreateInfo moduleInfo {};
+    moduleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    moduleInfo.codeSize = (res.cend() - res.cbegin()) * sizeof(uint32_t);
+    moduleInfo.pCode = res.cbegin();
+
+    VkShaderModule shaderModule;
+    if (vkCreateShaderModule(device, &moduleInfo, nullptr, &shaderModule) != VK_SUCCESS) {
+        log.error("Failed to create shader module.");
+        return VK_NULL_HANDLE;
+    }
+
+    return shaderModule;
 }
 
 void App::destroySwapchain() {
@@ -166,9 +201,8 @@ bool App::createSwapchain() {
     allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 
-    if (vmaCreateImage(vmaAllocator, &depthInfo, &allocInfo, &depthImage, &depthAllocation, nullptr) != VK_SUCCESS) {
+    if (vmaCreateImage(vmaAllocator, &depthInfo, &allocInfo, &depthImage, &depthAllocation, nullptr) != VK_SUCCESS)
         return false;
-    }
 
     VkImageViewCreateInfo depthViewInfo {};
     depthViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -358,16 +392,16 @@ VKAPI_ATTR VkBool32 VKAPI_CALL App::debugCallback(VkDebugUtilsMessageSeverityFla
     auto logger = reinterpret_cast<Log*>(pUserData);
     switch (messageSeverity) {
         case VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT:
-            logger->info(pCallbackData->pMessage);
+            logger->info("{}", pCallbackData->pMessage);
             break;
         case VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT:
-            logger->warn(pCallbackData->pMessage);
+            logger->warn("{}", pCallbackData->pMessage);
             break;
         case VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT:
-            logger->error(pCallbackData->pMessage);
+            logger->error("{}", pCallbackData->pMessage);
             break;
         default:
-            logger->info(pCallbackData->pMessage);
+            logger->info("{}", pCallbackData->pMessage);
     }
 
     return VK_FALSE;
