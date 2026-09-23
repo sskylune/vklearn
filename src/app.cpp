@@ -1,6 +1,5 @@
 #define VMA_IMPLEMENTATION
 #include <app.hpp>
-#include <config.hpp>
 #include <tools.hpp>
 
 bool App::init() {
@@ -49,6 +48,16 @@ bool App::init() {
         return false;
     }
 
+    if (!createGraphicsPipeline()) {
+        log.fatal("Failed to create graphics pipeline.");
+        return false;
+    }
+
+    if (!createSyncResources() && !initFrameResources()) {
+        log.fatal("Failed to create synchronization resources.");
+        return false;
+    }
+
     return true;
 }
 
@@ -61,6 +70,18 @@ void App::loop() {
 }
 
 void App::exit() {
+    vkDeviceWaitIdle(device);
+
+    vkDestroySemaphore(device, timelineSemaphore, nullptr);
+
+    for (const auto& res : frameResources) {
+        vkDestroyCommandPool(device, res.commandPool, nullptr);
+        vkDestroySemaphore(device, res.imageAcquiredSemaphore, nullptr);
+    }
+
+    vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+    vkDestroyPipeline(device, pipeline, nullptr);
+
     destroySwapchain();
 
     vmaDestroyAllocator(vmaAllocator);
@@ -72,6 +93,164 @@ void App::exit() {
     vkDestroyInstance(instance, nullptr);
 
     glfwTerminate();
+}
+
+bool App::initFrameResources() {
+    for (auto& res : frameResources) {
+        VkCommandPoolCreateInfo poolInfo {};
+        poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        poolInfo.queueFamilyIndex = gfxQueueIndex;
+        // Написать флаги когда будет ясно поведение ресурсов кадра
+        // poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSISTENT_BIT;
+
+        if (vkCreateCommandPool(device, &poolInfo, nullptr, &res.commandPool) != VK_SUCCESS) {
+            log.fatal("Failed to initialize per-frame command pool.");
+            return false;
+        }
+
+        VkCommandBufferAllocateInfo bufferInfo {};
+        bufferInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        bufferInfo.commandBufferCount = 1;
+        bufferInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        bufferInfo.commandPool = res.commandPool;
+
+        if (vkAllocateCommandBuffers(device, &bufferInfo, &res.commandBuffer) != VK_SUCCESS) {
+            log.fatal("Failed to initialize per-frame command buffer.");
+            return false;
+        }
+
+        for (auto& res : frameResources) {
+            VkSemaphoreCreateInfo semaphoreInfo {};
+            semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+            if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &res.imageAcquiredSemaphore) != VK_SUCCESS) {
+                log.fatal("Failed to initialize per-frame image-acquire semaphore.");
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+bool App::createSyncResources() {
+    VkSemaphoreTypeCreateInfo semaphoreTypeInfo {};
+    semaphoreTypeInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+    semaphoreTypeInfo.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+    semaphoreTypeInfo.initialValue = Config::FRAMES_IN_FLIGHT;
+
+    VkSemaphoreCreateInfo semaphoreInfo {};
+    semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    semaphoreInfo.pNext = &semaphoreTypeInfo;
+
+    if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &timelineSemaphore) != VK_SUCCESS) {
+        log.fatal("Failed to create the timeline semaphore.");
+        return false;
+    }
+
+    return true;
+}
+
+bool App::createGraphicsPipeline() {
+    VkPipelineLayoutCreateInfo layoutInfo {};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 0;
+    layoutInfo.pushConstantRangeCount = 0;
+
+    if (vkCreatePipelineLayout(device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
+        log.fatal("Failed to create pipeline layout.");
+        return false;
+    }
+
+    VkShaderModule vertShader = createShaderModule("shader.vert", shaderc_vertex_shader);
+    VkShaderModule fragShader = createShaderModule("shader.frag", shaderc_fragment_shader);
+
+    const char* entryPoint = "main";
+    std::vector<VkPipelineShaderStageCreateInfo> shaderStages(2);
+
+    shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    shaderStages[0].module = vertShader;
+    shaderStages[0].pName = entryPoint;
+
+    shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    shaderStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    shaderStages[1].module = fragShader;
+    shaderStages[1].pName = entryPoint;
+
+    VkPipelineVertexInputStateCreateInfo vertInputInfo {};
+    vertInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssemblyInfo {};
+    inputAssemblyInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssemblyInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineDepthStencilStateCreateInfo depthStencilInfo {};
+    depthStencilInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencilInfo.depthTestEnable = VK_TRUE;
+    depthStencilInfo.depthWriteEnable = VK_TRUE;
+    depthStencilInfo.depthCompareOp = VK_COMPARE_OP_LESS;
+    depthStencilInfo.stencilTestEnable = VK_FALSE;
+
+    VkPipelineViewportStateCreateInfo viewportInfo {};
+    viewportInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportInfo.viewportCount = 1;
+    viewportInfo.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterInfo {};
+    rasterInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterInfo.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterInfo.cullMode = VK_CULL_MODE_BACK_BIT;
+    rasterInfo.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    rasterInfo.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo multisampleInfo {};
+    multisampleInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampleInfo.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState blendAttachment {};
+    blendAttachment.blendEnable = VK_FALSE;
+    blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+    VkPipelineColorBlendStateCreateInfo blendInfo {};
+    blendInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    blendInfo.attachmentCount = 1;
+    blendInfo.pAttachments = &blendAttachment;
+
+    std::vector<VkDynamicState> dynamicState { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkPipelineDynamicStateCreateInfo dynamicInfo {};
+    dynamicInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicInfo.dynamicStateCount = static_cast<uint32_t>(dynamicState.size());
+    dynamicInfo.pDynamicStates = dynamicState.data();
+
+    VkPipelineRenderingCreateInfo renderInfo {};
+    renderInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    renderInfo.colorAttachmentCount = 1;
+    renderInfo.pColorAttachmentFormats = &swapchainFormat;
+    renderInfo.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo {};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.pNext = &renderInfo;
+    pipelineInfo.stageCount = static_cast<uint32_t>(shaderStages.size());
+    pipelineInfo.pStages = shaderStages.data();
+    pipelineInfo.pVertexInputState = &vertInputInfo;
+    pipelineInfo.pInputAssemblyState = &inputAssemblyInfo;
+    pipelineInfo.pDepthStencilState = &depthStencilInfo;
+    pipelineInfo.pViewportState = &viewportInfo;
+    pipelineInfo.pRasterizationState = &rasterInfo;
+    pipelineInfo.pMultisampleState = &multisampleInfo;
+    pipelineInfo.pColorBlendState = &blendInfo;
+    pipelineInfo.pDynamicState = &dynamicInfo;
+    pipelineInfo.layout = pipelineLayout;
+    pipelineInfo.renderPass = VK_NULL_HANDLE;
+
+    if (vkCreateGraphicsPipelines(device, nullptr, 1, &pipelineInfo, nullptr, &pipeline) != VK_SUCCESS)
+        return false;
+
+    vkDestroyShaderModule(device, vertShader, nullptr);
+    vkDestroyShaderModule(device, fragShader, nullptr);
+
+    return true;
 }
 
 VkShaderModule App::createShaderModule(const std::string& filename, shaderc_shader_kind kind) {
@@ -123,7 +302,7 @@ void App::destroySwapchain() {
 }
 
 bool App::createSwapchain() {
-    swapchainExtent = { .width = config::SCR_WIDTH, .height = config::SCR_HEIGHT };
+    swapchainExtent = { .width = Config::SCR_WIDTH, .height = Config::SCR_HEIGHT };
 
     VkSurfaceCapabilitiesKHR surfaceCaps {};
     if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &surfaceCaps) != VK_SUCCESS) {
@@ -462,7 +641,7 @@ bool App::createWindow() {
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
-    window = glfwCreateWindow(config::SCR_WIDTH, config::SCR_HEIGHT, config::SCR_TITLE, nullptr, nullptr);
+    window = glfwCreateWindow(Config::SCR_WIDTH, Config::SCR_HEIGHT, Config::SCR_TITLE, nullptr, nullptr);
 
     if (!window)
         return false;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <log.hpp>
+#include <config.hpp>
 
 #include <volk.h>
 #define GLFW_INCLUDE_VULKAN
@@ -70,6 +71,7 @@ private:
     VkImage depthImage = VK_NULL_HANDLE;
     VkImageView depthImageView = VK_NULL_HANDLE;
     VmaAllocation depthAllocation = VK_NULL_HANDLE;
+    bool resetSwapchain = false;
 
     bool createSwapchain();
     void destroySwapchain();
@@ -80,4 +82,21 @@ private:
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline pipeline = VK_NULL_HANDLE;
     bool createGraphicsPipeline();
+
+    // Synchronization
+    struct FrameResources {
+        VkCommandPool commandPool = VK_NULL_HANDLE;
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+        VkSemaphore imageAcquiredSemaphore = VK_NULL_HANDLE;
+    };
+    std::array<FrameResources, Config::FRAMES_IN_FLIGHT> frameResources;
+    uint32_t frameIndex = 0;
+
+    VkSemaphore timelineSemaphore = VK_NULL_HANDLE;
+
+    bool createSyncResources();
+    bool initFrameResources();
+
+    // Render
+    void render();
 };
