@@ -28,6 +28,8 @@ private:
         VkDebugUtilsMessageTypeFlagsEXT messageType, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData);
 
     // Window
+    static void glfwFramebufferSizeCallback(GLFWwindow* window, int width, int height);
+
     GLFWwindow* window = nullptr;
     bool createWindow();
 
@@ -58,7 +60,7 @@ private:
 
     // Vulkan swapchain
     VkSwapchainKHR swapchain = VK_NULL_HANDLE;
-    VkExtent2D swapchainExtent;
+    VkExtent2D swapchainExtent { .width = Config::SCR_WIDTH, .height = Config::SCR_HEIGHT };
 
     VkFormat swapchainFormat;
     VkColorSpaceKHR swapchainColorSpace;
@@ -87,10 +89,11 @@ private:
     struct FrameResources {
         VkCommandPool commandPool = VK_NULL_HANDLE;
         VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+
         VkSemaphore imageAcquiredSemaphore = VK_NULL_HANDLE;
+        VkSemaphore renderFinishedSemaphore = VK_NULL_HANDLE;
     };
     std::array<FrameResources, Config::FRAMES_IN_FLIGHT> frameResources;
-    uint32_t frameIndex = 0;
 
     VkSemaphore timelineSemaphore = VK_NULL_HANDLE;
 
@@ -98,5 +101,8 @@ private:
     bool initFrameResources();
 
     // Render
+    uint64_t frameIndex = 0;
+    uint64_t nextSignalValue = Config::FRAMES_IN_FLIGHT + 1;
+
     void render();
 };

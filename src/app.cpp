@@ -53,7 +53,7 @@ bool App::init() {
         return false;
     }
 
-    if (!createSyncResources() && !initFrameResources()) {
+    if (!createSyncResources() || !initFrameResources()) {
         log.fatal("Failed to create synchronization resources.");
         return false;
     }
@@ -64,6 +64,8 @@ bool App::init() {
 void App::loop() {
     while (!glfwWindowShouldClose(window)) {
         glfwSwapBuffers(window);
+
+        render();
 
         glfwPollEvents();
     }
@@ -77,6 +79,7 @@ void App::exit() {
     for (const auto& res : frameResources) {
         vkDestroyCommandPool(device, res.commandPool, nullptr);
         vkDestroySemaphore(device, res.imageAcquiredSemaphore, nullptr);
+        vkDestroySemaphore(device, res.renderFinishedSemaphore, nullptr);
     }
 
     vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
@@ -95,13 +98,210 @@ void App::exit() {
     glfwTerminate();
 }
 
+void App::render() {
+    if (swapchainExtent.width == 0 || swapchainExtent.height == 0)
+        return;
+
+    if (resetSwapchain) {
+        vkDeviceWaitIdle(device);
+        destroySwapchain();
+        createSwapchain();
+        resetSwapchain = false;
+    }
+
+    const uint32_t frameResIndex = frameIndex++ % Config::FRAMES_IN_FLIGHT;
+    const uint64_t signalValue = nextSignalValue++;
+    const uint64_t waitValue = signalValue - Config::FRAMES_IN_FLIGHT;
+
+    VkSemaphoreWaitInfo waitInfo {};
+    waitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
+    waitInfo.semaphoreCount = 1;
+    waitInfo.pSemaphores = &timelineSemaphore;
+    waitInfo.pValues = &waitValue;
+
+    vkWaitSemaphores(device, &waitInfo, UINT64_MAX);
+
+    FrameResources& res = frameResources[frameResIndex];
+    vkResetCommandPool(device, res.commandPool, 0);
+
+    uint32_t imageIndex = 0;
+    VkResult acquireResult = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, res.imageAcquiredSemaphore, VK_NULL_HANDLE, &imageIndex);
+
+    switch (acquireResult) {
+        case VK_ERROR_OUT_OF_DATE_KHR:
+            resetSwapchain = true;
+            return;
+        case VK_SUBOPTIMAL_KHR:
+            resetSwapchain = true;
+        default:
+            break;
+    }
+
+    VkCommandBufferBeginInfo cmdBeginInfo {};
+    cmdBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    cmdBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    vkBeginCommandBuffer(res.commandBuffer, &cmdBeginInfo);
+
+    std::vector<VkImageMemoryBarrier2> layoutBarriers(2);
+    layoutBarriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    layoutBarriers[0].srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    layoutBarriers[0].srcAccessMask = 0;
+    layoutBarriers[0].dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    layoutBarriers[0].dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    layoutBarriers[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    layoutBarriers[0].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    layoutBarriers[0].image = swapchainImages[imageIndex];
+    layoutBarriers[0].subresourceRange = {
+        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .baseMipLevel = 0,
+        .levelCount = 1,
+        .baseArrayLayer = 0,
+        .layerCount = 1,
+    };
+
+    layoutBarriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    layoutBarriers[1].srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
+    layoutBarriers[1].srcAccessMask = 0;
+    layoutBarriers[1].dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR;
+    layoutBarriers[1].dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    layoutBarriers[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    layoutBarriers[1].newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    layoutBarriers[1].image = depthImage;
+    layoutBarriers[1].subresourceRange = {
+        .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+        .baseMipLevel = 0,
+        .levelCount = 1,
+        .baseArrayLayer = 0,
+        .layerCount = 1,
+    };
+
+    VkDependencyInfo depInfo {};
+    depInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    depInfo.imageMemoryBarrierCount = static_cast<uint32_t>(layoutBarriers.size());
+    depInfo.pImageMemoryBarriers = layoutBarriers.data();
+    vkCmdPipelineBarrier2(res.commandBuffer, &depInfo);
+
+    VkRenderingAttachmentInfo colorAttachInfo {};
+    colorAttachInfo.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    colorAttachInfo.imageView = swapchainImageViews[imageIndex];
+    colorAttachInfo.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    colorAttachInfo.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachInfo.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachInfo.clearValue = { .color { { 0.01f, 0.01f, 0.01f, 1 } } };
+
+    VkRenderingAttachmentInfo depthAttachInfo {};
+    depthAttachInfo.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    depthAttachInfo.imageView = depthImageView;
+    depthAttachInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depthAttachInfo.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachInfo.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachInfo.clearValue = { .depthStencil { 1.0f, 0 } };
+
+    VkRenderingInfo renderInfo {};
+    renderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    renderInfo.renderArea = {
+        .offset { .x = 0, .y = 0 },
+        .extent = swapchainExtent,
+    };
+    renderInfo.layerCount = 1;
+    renderInfo.colorAttachmentCount = 1;
+    renderInfo.pColorAttachments = &colorAttachInfo;
+    renderInfo.pDepthAttachment = &depthAttachInfo;
+
+    vkCmdBeginRendering(res.commandBuffer, &renderInfo);
+
+    VkViewport viewport = {
+        .x = 0,
+        .y = 0,
+        .width = static_cast<float>(swapchainExtent.width),
+        .height = static_cast<float>(swapchainExtent.height),
+    };
+    vkCmdSetViewport(res.commandBuffer, 0, 1, &viewport);
+
+    VkRect2D scissor = {
+        .offset = { .x = 0, .y = 0 },
+        .extent = swapchainExtent,
+    };
+    vkCmdSetScissor(res.commandBuffer, 0, 1, &scissor);
+
+    vkCmdBindPipeline(res.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdDraw(res.commandBuffer, 3, 1, 0, 0);
+
+    vkCmdEndRendering(res.commandBuffer);
+
+    VkImageMemoryBarrier2 presentLayoutBarrier {};
+    presentLayoutBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    presentLayoutBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    presentLayoutBarrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    presentLayoutBarrier.dstStageMask = VK_PIPELINE_STAGE_2_NONE;
+    presentLayoutBarrier.dstAccessMask = 0;
+    presentLayoutBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    presentLayoutBarrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    presentLayoutBarrier.image = swapchainImages[imageIndex];
+    presentLayoutBarrier.subresourceRange = {
+        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .baseMipLevel = 0,
+        .levelCount = 1,
+        .baseArrayLayer = 0,
+        .layerCount = 1,
+    };
+
+    VkDependencyInfo presentDepInfo {};
+    presentDepInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    presentDepInfo.imageMemoryBarrierCount = 1;
+    presentDepInfo.pImageMemoryBarriers = &presentLayoutBarrier;
+
+    vkCmdPipelineBarrier2(res.commandBuffer, &presentDepInfo);
+
+    vkEndCommandBuffer(res.commandBuffer);
+
+    VkSemaphoreSubmitInfo imageAcquireWaitInfo {};
+    imageAcquireWaitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+    imageAcquireWaitInfo.semaphore = res.imageAcquiredSemaphore;
+    imageAcquireWaitInfo.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+    std::vector<VkSemaphoreSubmitInfo> signalSemaphores(2);
+    signalSemaphores[0].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+    signalSemaphores[0].semaphore = timelineSemaphore;
+    signalSemaphores[0].value = signalValue;
+    signalSemaphores[0].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+
+    signalSemaphores[1].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+    signalSemaphores[1].semaphore = res.renderFinishedSemaphore;
+    signalSemaphores[1].stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+    VkCommandBufferSubmitInfo cmdSubmitInfo {};
+    cmdSubmitInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
+    cmdSubmitInfo.commandBuffer = res.commandBuffer;
+
+    VkSubmitInfo2 submitInfo {};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+    submitInfo.waitSemaphoreInfoCount = 1;
+    submitInfo.pWaitSemaphoreInfos = &imageAcquireWaitInfo;
+    submitInfo.commandBufferInfoCount = 1;
+    submitInfo.pCommandBufferInfos = &cmdSubmitInfo;
+    submitInfo.signalSemaphoreInfoCount = static_cast<uint32_t>(signalSemaphores.size());
+    submitInfo.pSignalSemaphoreInfos = signalSemaphores.data();
+
+    vkQueueSubmit2(gfxQueue, 1, &submitInfo, VK_NULL_HANDLE);
+
+    VkPresentInfoKHR presentInfo {};
+    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    presentInfo.waitSemaphoreCount = 1;
+    presentInfo.pWaitSemaphores = &res.renderFinishedSemaphore;
+    presentInfo.swapchainCount = 1;
+    presentInfo.pSwapchains = &swapchain;
+    presentInfo.pImageIndices = &imageIndex;
+
+    vkQueuePresentKHR(gfxQueue, &presentInfo);
+}
+
 bool App::initFrameResources() {
     for (auto& res : frameResources) {
         VkCommandPoolCreateInfo poolInfo {};
         poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
         poolInfo.queueFamilyIndex = gfxQueueIndex;
-        // Написать флаги когда будет ясно поведение ресурсов кадра
-        // poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSISTENT_BIT;
 
         if (vkCreateCommandPool(device, &poolInfo, nullptr, &res.commandPool) != VK_SUCCESS) {
             log.fatal("Failed to initialize per-frame command pool.");
@@ -119,13 +319,18 @@ bool App::initFrameResources() {
             return false;
         }
 
-        for (auto& res : frameResources) {
-            VkSemaphoreCreateInfo semaphoreInfo {};
-            semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-            if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &res.imageAcquiredSemaphore) != VK_SUCCESS) {
-                log.fatal("Failed to initialize per-frame image-acquire semaphore.");
-                return false;
-            }
+        VkSemaphoreCreateInfo imageAcquiredSemaphoreInfo {};
+        imageAcquiredSemaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        if (vkCreateSemaphore(device, &imageAcquiredSemaphoreInfo, nullptr, &res.imageAcquiredSemaphore) != VK_SUCCESS) {
+            log.fatal("Failed to initialize per-frame image-acquire semaphore.");
+            return false;
+        }
+
+        VkSemaphoreCreateInfo renderFinishedSemaphoreInfo {};
+        renderFinishedSemaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        if (vkCreateSemaphore(device, &renderFinishedSemaphoreInfo, nullptr, &res.renderFinishedSemaphore) != VK_SUCCESS) {
+            log.fatal("Failed to initialize per-frame render-finished semaphore.");
+            return false;
         }
     }
 
@@ -302,8 +507,6 @@ void App::destroySwapchain() {
 }
 
 bool App::createSwapchain() {
-    swapchainExtent = { .width = Config::SCR_WIDTH, .height = Config::SCR_HEIGHT };
-
     VkSurfaceCapabilitiesKHR surfaceCaps {};
     if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &surfaceCaps) != VK_SUCCESS) {
         log.fatal("Couldn't get the surface capabilities.");
@@ -637,14 +840,29 @@ bool App::createVulkanInstance() {
     return true;
 }
 
+void App::glfwFramebufferSizeCallback(GLFWwindow* window, int width, int height) {
+    auto* app = static_cast<App*>(glfwGetWindowUserPointer(window));
+
+    if (app) {
+        app->swapchainExtent = {
+            .width = static_cast<uint32_t>(width),
+            .height = static_cast<uint32_t>(height),
+        };
+
+        app->resetSwapchain = true;
+    }
+}
+
 bool App::createWindow() {
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
     window = glfwCreateWindow(Config::SCR_WIDTH, Config::SCR_HEIGHT, Config::SCR_TITLE, nullptr, nullptr);
 
     if (!window)
         return false;
+
+    glfwSetWindowUserPointer(window, this);
+    glfwSetFramebufferSizeCallback(window, glfwFramebufferSizeCallback);
 
     glfwMakeContextCurrent(window);
 
