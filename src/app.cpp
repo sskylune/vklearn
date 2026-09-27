@@ -23,7 +23,7 @@ bool App::init() {
         return false;
     }
 
-    if (!peakPhysicalDevice()) {
+    if (!pickPhysicalDevice()) {
         log.fatal("Could't find suitable physical device.");
         return false;
     }
@@ -133,6 +133,7 @@ void App::render() {
             return;
         case VK_SUBOPTIMAL_KHR:
             resetSwapchain = true;
+            break;
         default:
             break;
     }
@@ -143,17 +144,35 @@ void App::render() {
 
     vkBeginCommandBuffer(res.commandBuffer, &cmdBeginInfo);
 
-    VkImageMemoryBarrier2 colorAttachmentBarrier {};
-    colorAttachmentBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    colorAttachmentBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    colorAttachmentBarrier.srcAccessMask = 0;
-    colorAttachmentBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    colorAttachmentBarrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-    colorAttachmentBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAttachmentBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    colorAttachmentBarrier.image = swapchainResources[imageIndex].image;
-    colorAttachmentBarrier.subresourceRange = {
+    std::vector<VkImageMemoryBarrier2> barriers(2);
+    // Color attachment barrier
+    barriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    barriers[0].srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    barriers[0].srcAccessMask = 0;
+    barriers[0].dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    barriers[0].dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    barriers[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barriers[0].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barriers[0].image = swapchainResources[imageIndex].image;
+    barriers[0].subresourceRange = {
         .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .baseMipLevel = 0,
+        .levelCount = 1,
+        .baseArrayLayer = 0,
+        .layerCount = 1,
+    };
+
+    // Depth barrier
+    barriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    barriers[1].srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+    barriers[1].srcAccessMask = 0;
+    barriers[1].dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+    barriers[1].dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+    barriers[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barriers[1].newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    barriers[1].image = swapchainResources[imageIndex].depthImage;
+    barriers[1].subresourceRange = {
+        .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
         .baseMipLevel = 0,
         .levelCount = 1,
         .baseArrayLayer = 0,
@@ -162,8 +181,8 @@ void App::render() {
 
     VkDependencyInfo depInfo {};
     depInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    depInfo.imageMemoryBarrierCount = 1;
-    depInfo.pImageMemoryBarriers = &colorAttachmentBarrier;
+    depInfo.imageMemoryBarrierCount = static_cast<uint32_t>(barriers.size());
+    depInfo.pImageMemoryBarriers = barriers.data();
     vkCmdPipelineBarrier2(res.commandBuffer, &depInfo);
 
     VkRenderingAttachmentInfo colorAttachInfo {};
@@ -341,8 +360,13 @@ bool App::createGraphicsPipeline() {
         return false;
     }
 
-    VkShaderModule vertShader = createShaderModule("shader.vert", shaderc_vertex_shader);
-    VkShaderModule fragShader = createShaderModule("shader.frag", shaderc_fragment_shader);
+    VkShaderModule vertShader = createShaderModule("build/shader.vert.spv");
+    VkShaderModule fragShader = createShaderModule("build/shader.frag.spv");
+
+    if (vertShader == VK_NULL_HANDLE || fragShader == VK_NULL_HANDLE) {
+        log.fatal("Failed to create shader modules.");
+        return false;
+    }
 
     const char* entryPoint = "main";
     std::vector<VkPipelineShaderStageCreateInfo> shaderStages(2);
@@ -433,30 +457,17 @@ bool App::createGraphicsPipeline() {
     return true;
 }
 
-VkShaderModule App::createShaderModule(const std::string& filename, shaderc_shader_kind kind) {
-    std::string filepath = "src/shaders/" + filename;
-    std::string src = readTextFile(filepath);
-    if (src.empty()) {
-        log.error("Failed to create shader module. Shader source file doesn't exist.");
-        return nullptr;
-    }
-
-    shaderc::Compiler compiler;
-    shaderc::CompileOptions options;
-    options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
-    options.SetTargetSpirv(shaderc_spirv_version_1_6);
-    options.SetOptimizationLevel(shaderc_optimization_level_performance);
-    shaderc::CompilationResult res = compiler.CompileGlslToSpv(src, kind, filename.c_str(), options);
-
-    if (res.GetCompilationStatus() != shaderc_compilation_status_success) {
-        log.error("Shader compilation error: {}", res.GetErrorMessage());
+VkShaderModule App::createShaderModule(const std::string& filename) {
+    auto shader = readBinaryFile(filename);
+    if (shader.empty()) {
+        log.error("Failed to read shader file: {}", filename);
         return VK_NULL_HANDLE;
     }
 
     VkShaderModuleCreateInfo moduleInfo {};
     moduleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    moduleInfo.codeSize = (res.cend() - res.cbegin()) * sizeof(uint32_t);
-    moduleInfo.pCode = res.cbegin();
+    moduleInfo.codeSize = shader.size();
+    moduleInfo.pCode = reinterpret_cast<const uint32_t*>(shader.data());
 
     VkShaderModule shaderModule;
     if (vkCreateShaderModule(device, &moduleInfo, nullptr, &shaderModule) != VK_SUCCESS) {
@@ -518,7 +529,7 @@ bool App::createSwapchain() {
     vkGetSwapchainImagesKHR(device, swapchain, &imageCount, buffer.data());
 
     swapchainResources.resize(imageCount);
-    for (int i = 0; i < imageCount; ++i) {
+    for (uint32_t i = 0; i < imageCount; ++i) {
         swapchainResources[i].image = buffer[i];
 
         VkImageViewCreateInfo imageViewInfo {};
@@ -674,7 +685,7 @@ bool App::findGraphicsQueue() {
     std::vector<VkQueueFamilyProperties> props(queueFamCount);
     vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamCount, props.data());
 
-    for (int idx = 0; idx < props.size(); ++idx) {
+    for (size_t idx = 0; idx < props.size(); ++idx) {
         VkBool32 surfaceSupport = VK_FALSE;
         vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, idx, surface, &surfaceSupport);
 
@@ -688,7 +699,7 @@ bool App::findGraphicsQueue() {
     return false;
 }
 
-bool App::peakPhysicalDevice() {
+bool App::pickPhysicalDevice() {
     uint32_t deviceCount = 0;
     vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
 
@@ -784,7 +795,7 @@ bool App::createVulkanInstance() {
     uint32_t extensionCount = 0;
     const char** windowExtensions = glfwGetRequiredInstanceExtensions(&extensionCount);
     std::vector<const char*> requestedExtensions;
-    for (int i = 0; i < extensionCount; ++i)
+    for (uint32_t i = 0; i < extensionCount; ++i)
         requestedExtensions.push_back(windowExtensions[i]);
 #ifndef NDEBUG
     requestedExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -844,8 +855,6 @@ bool App::createWindow() {
 
     glfwSetWindowUserPointer(window, this);
     glfwSetFramebufferSizeCallback(window, glfwFramebufferSizeCallback);
-
-    glfwMakeContextCurrent(window);
 
     return true;
 }

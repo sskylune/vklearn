@@ -7,7 +7,6 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <vma/vk_mem_alloc.h>
-#include <shaderc/shaderc.hpp>
 
 #include <vector>
 
@@ -43,7 +42,7 @@ private:
 
     // Physical device
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
-    bool peakPhysicalDevice();
+    bool pickPhysicalDevice();
 
     // Graphics queue
     VkQueue gfxQueue = VK_NULL_HANDLE;
@@ -82,7 +81,7 @@ private:
     void destroySwapchain();
 
     // Graphics pipeline
-    VkShaderModule createShaderModule(const std::string& filename, shaderc_shader_kind kind);
+    VkShaderModule createShaderModule(const std::string& filename);
 
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline pipeline = VK_NULL_HANDLE;

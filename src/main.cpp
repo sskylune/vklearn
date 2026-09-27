@@ -18,6 +18,8 @@ class Handler : public LogHandler {
             case MessageSeverity::FATAL:
                 spdlog::critical(message);
                 break;
+            default:
+                break;
         }
     }
 };
