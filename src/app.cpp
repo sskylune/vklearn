@@ -143,33 +143,17 @@ void App::render() {
 
     vkBeginCommandBuffer(res.commandBuffer, &cmdBeginInfo);
 
-    std::vector<VkImageMemoryBarrier2> layoutBarriers(2);
-    layoutBarriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    layoutBarriers[0].srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    layoutBarriers[0].srcAccessMask = 0;
-    layoutBarriers[0].dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    layoutBarriers[0].dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-    layoutBarriers[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    layoutBarriers[0].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    layoutBarriers[0].image = swapchainImages[imageIndex];
-    layoutBarriers[0].subresourceRange = {
+    VkImageMemoryBarrier2 colorAttachmentBarrier {};
+    colorAttachmentBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    colorAttachmentBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    colorAttachmentBarrier.srcAccessMask = 0;
+    colorAttachmentBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    colorAttachmentBarrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    colorAttachmentBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachmentBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    colorAttachmentBarrier.image = swapchainResources[imageIndex].image;
+    colorAttachmentBarrier.subresourceRange = {
         .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-        .baseMipLevel = 0,
-        .levelCount = 1,
-        .baseArrayLayer = 0,
-        .layerCount = 1,
-    };
-
-    layoutBarriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    layoutBarriers[1].srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
-    layoutBarriers[1].srcAccessMask = 0;
-    layoutBarriers[1].dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT_KHR;
-    layoutBarriers[1].dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    layoutBarriers[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    layoutBarriers[1].newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-    layoutBarriers[1].image = depthImage;
-    layoutBarriers[1].subresourceRange = {
-        .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
         .baseMipLevel = 0,
         .levelCount = 1,
         .baseArrayLayer = 0,
@@ -178,25 +162,17 @@ void App::render() {
 
     VkDependencyInfo depInfo {};
     depInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    depInfo.imageMemoryBarrierCount = static_cast<uint32_t>(layoutBarriers.size());
-    depInfo.pImageMemoryBarriers = layoutBarriers.data();
+    depInfo.imageMemoryBarrierCount = 1;
+    depInfo.pImageMemoryBarriers = &colorAttachmentBarrier;
     vkCmdPipelineBarrier2(res.commandBuffer, &depInfo);
 
     VkRenderingAttachmentInfo colorAttachInfo {};
     colorAttachInfo.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    colorAttachInfo.imageView = swapchainImageViews[imageIndex];
+    colorAttachInfo.imageView = swapchainResources[imageIndex].imageView;
     colorAttachInfo.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     colorAttachInfo.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     colorAttachInfo.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachInfo.clearValue = { .color { { 0.01f, 0.01f, 0.01f, 1 } } };
-
-    VkRenderingAttachmentInfo depthAttachInfo {};
-    depthAttachInfo.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    depthAttachInfo.imageView = depthImageView;
-    depthAttachInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-    depthAttachInfo.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depthAttachInfo.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depthAttachInfo.clearValue = { .depthStencil { 1.0f, 0 } };
 
     VkRenderingInfo renderInfo {};
     renderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
@@ -207,7 +183,6 @@ void App::render() {
     renderInfo.layerCount = 1;
     renderInfo.colorAttachmentCount = 1;
     renderInfo.pColorAttachments = &colorAttachInfo;
-    renderInfo.pDepthAttachment = &depthAttachInfo;
 
     vkCmdBeginRendering(res.commandBuffer, &renderInfo);
 
@@ -238,7 +213,7 @@ void App::render() {
     presentLayoutBarrier.dstAccessMask = 0;
     presentLayoutBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     presentLayoutBarrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    presentLayoutBarrier.image = swapchainImages[imageIndex];
+    presentLayoutBarrier.image = swapchainResources[imageIndex].image;
     presentLayoutBarrier.subresourceRange = {
         .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
         .baseMipLevel = 0,
@@ -493,17 +468,18 @@ VkShaderModule App::createShaderModule(const std::string& filename, shaderc_shad
 }
 
 void App::destroySwapchain() {
-    for (const auto& imageView : swapchainImageViews)
-        vkDestroyImageView(device, imageView, nullptr);
-    swapchainImageViews.clear();
+    for (auto& res : swapchainResources) {
+        vkDestroyImageView(device, res.imageView, nullptr);
+
+        vkDestroyImageView(device, res.depthImageView, nullptr);
+        res.depthImageView = VK_NULL_HANDLE;
+        vmaDestroyImage(vmaAllocator, res.depthImage, res.depthAllocation);
+        res.depthImage = VK_NULL_HANDLE;
+    }
+    swapchainResources.clear();
 
     vkDestroySwapchainKHR(device, swapchain, nullptr);
     swapchain = VK_NULL_HANDLE;
-
-    vkDestroyImageView(device, depthImageView, nullptr);
-    depthImageView = VK_NULL_HANDLE;
-    vmaDestroyImage(vmaAllocator, depthImage, depthAllocation);
-    depthImage = VK_NULL_HANDLE;
 }
 
 bool App::createSwapchain() {
@@ -538,14 +514,16 @@ bool App::createSwapchain() {
     // Swapchain image & image view
     uint32_t imageCount = 0;
     vkGetSwapchainImagesKHR(device, swapchain, &imageCount, nullptr);
-    swapchainImages.resize(imageCount);
-    vkGetSwapchainImagesKHR(device, swapchain, &imageCount, swapchainImages.data());
-    swapchainImageViews.resize(imageCount);
+    std::vector<VkImage> buffer(imageCount);
+    vkGetSwapchainImagesKHR(device, swapchain, &imageCount, buffer.data());
 
+    swapchainResources.resize(imageCount);
     for (int i = 0; i < imageCount; ++i) {
+        swapchainResources[i].image = buffer[i];
+
         VkImageViewCreateInfo imageViewInfo {};
         imageViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        imageViewInfo.image = swapchainImages[i];
+        imageViewInfo.image = swapchainResources[i].image;
         imageViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
         imageViewInfo.format = swapchainFormat;
         imageViewInfo.subresourceRange = {
@@ -556,52 +534,55 @@ bool App::createSwapchain() {
             .layerCount = 1,
         };
 
-        if (vkCreateImageView(device, &imageViewInfo, nullptr, &swapchainImageViews[i]) != VK_SUCCESS) {
+        if (vkCreateImageView(device, &imageViewInfo, nullptr, &swapchainResources[i].imageView) != VK_SUCCESS) {
             log.fatal("Failed to create swapchain image view.");
             return false;
         }
-    }
 
-    // Depth buffer
-    VkImageCreateInfo depthInfo {};
-    depthInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    depthInfo.imageType = VK_IMAGE_TYPE_2D;
-    depthInfo.format = VK_FORMAT_D32_SFLOAT;
-    depthInfo.extent = {
-        .width = swapchainExtent.width,
-        .height = swapchainExtent.height,
-        .depth = 1,
-    };
-    depthInfo.mipLevels = 1;
-    depthInfo.arrayLayers = 1;
-    depthInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-    depthInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    depthInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-    depthInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        // Depth buffer
+        VkImageCreateInfo depthInfo {};
+        depthInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        depthInfo.imageType = VK_IMAGE_TYPE_2D;
+        depthInfo.format = VK_FORMAT_D32_SFLOAT;
+        depthInfo.extent = {
+            .width = swapchainExtent.width,
+            .height = swapchainExtent.height,
+            .depth = 1,
+        };
+        depthInfo.mipLevels = 1;
+        depthInfo.arrayLayers = 1;
+        depthInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        depthInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        depthInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        depthInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-    VmaAllocationCreateInfo allocInfo {};
-    allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
-    allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+        VmaAllocationCreateInfo allocInfo {};
+        allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+        allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 
-    if (vmaCreateImage(vmaAllocator, &depthInfo, &allocInfo, &depthImage, &depthAllocation, nullptr) != VK_SUCCESS)
-        return false;
+        if (vmaCreateImage(vmaAllocator, &depthInfo, &allocInfo, &swapchainResources[i].depthImage, &swapchainResources[i].depthAllocation,
+                nullptr) != VK_SUCCESS) {
+            log.fatal("Failed to allocate depth buffer.");
+            return false;
+        }
 
-    VkImageViewCreateInfo depthViewInfo {};
-    depthViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    depthViewInfo.image = depthImage;
-    depthViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    depthViewInfo.format = VK_FORMAT_D32_SFLOAT;
-    depthViewInfo.subresourceRange = {
-        .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
-        .baseMipLevel = 0,
-        .levelCount = 1,
-        .baseArrayLayer = 0,
-        .layerCount = 1,
-    };
+        VkImageViewCreateInfo depthViewInfo {};
+        depthViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        depthViewInfo.image = swapchainResources[i].depthImage;
+        depthViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        depthViewInfo.format = VK_FORMAT_D32_SFLOAT;
+        depthViewInfo.subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        };
 
-    if (vkCreateImageView(device, &depthViewInfo, nullptr, &depthImageView) != VK_SUCCESS) {
-        log.fatal("Failed to create depth image view.");
-        return false;
+        if (vkCreateImageView(device, &depthViewInfo, nullptr, &swapchainResources[i].depthImageView) != VK_SUCCESS) {
+            log.fatal("Failed to create depth image view.");
+            return false;
+        }
     }
 
     return true;

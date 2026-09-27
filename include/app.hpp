@@ -27,7 +27,7 @@ private:
     static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
         VkDebugUtilsMessageTypeFlagsEXT messageType, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData);
 
-    // Window
+    // GLFW window
     static void glfwFramebufferSizeCallback(GLFWwindow* window, int width, int height);
 
     GLFWwindow* window = nullptr;
@@ -37,7 +37,7 @@ private:
     VkInstance instance = VK_NULL_HANDLE;
     bool createVulkanInstance();
 
-    // Vulkan surface
+    // Surface
     VkSurfaceKHR surface = VK_NULL_HANDLE;
     bool createVulkanSurface();
 
@@ -50,7 +50,7 @@ private:
     uint32_t gfxQueueIndex = 0;
     bool findGraphicsQueue();
 
-    // Vulkan device
+    // Device
     VkDevice device = VK_NULL_HANDLE;
     bool createDevice();
 
@@ -58,7 +58,7 @@ private:
     VmaAllocator vmaAllocator = VK_NULL_HANDLE;
     bool initVMA();
 
-    // Vulkan swapchain
+    // Swapchain
     VkSwapchainKHR swapchain = VK_NULL_HANDLE;
     VkExtent2D swapchainExtent { .width = Config::SCR_WIDTH, .height = Config::SCR_HEIGHT };
 
@@ -66,19 +66,22 @@ private:
     VkColorSpaceKHR swapchainColorSpace;
     VkPresentModeKHR swapchainPresentMode;
 
-    std::vector<VkImage> swapchainImages;
-    std::vector<VkImageView> swapchainImageViews;
+    struct SwapchainResources {
+        VkImage image = VK_NULL_HANDLE;
+        VkImageView imageView = VK_NULL_HANDLE;
+        // Depth
+        VkImage depthImage = VK_NULL_HANDLE;
+        VkImageView depthImageView = VK_NULL_HANDLE;
+        VmaAllocation depthAllocation = VK_NULL_HANDLE;
+    };
+    std::vector<SwapchainResources> swapchainResources;
 
-    // Depth
-    VkImage depthImage = VK_NULL_HANDLE;
-    VkImageView depthImageView = VK_NULL_HANDLE;
-    VmaAllocation depthAllocation = VK_NULL_HANDLE;
     bool resetSwapchain = false;
 
     bool createSwapchain();
     void destroySwapchain();
 
-    // Pipeline
+    // Graphics pipeline
     VkShaderModule createShaderModule(const std::string& filename, shaderc_shader_kind kind);
 
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
