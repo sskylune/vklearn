@@ -193,6 +193,14 @@ void App::render() {
     colorAttachInfo.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachInfo.clearValue = { .color { { 0.01f, 0.01f, 0.01f, 1 } } };
 
+    VkRenderingAttachmentInfo depthAttachInfo {};
+    depthAttachInfo.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    depthAttachInfo.imageView = swapchainResources[imageIndex].depthImageView;
+    depthAttachInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depthAttachInfo.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachInfo.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachInfo.clearValue = { .depthStencil { 1.0f, 0 } };
+
     VkRenderingInfo renderInfo {};
     renderInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
     renderInfo.renderArea = {
@@ -202,6 +210,7 @@ void App::render() {
     renderInfo.layerCount = 1;
     renderInfo.colorAttachmentCount = 1;
     renderInfo.pColorAttachments = &colorAttachInfo;
+    renderInfo.pDepthAttachment = &depthAttachInfo;
 
     vkCmdBeginRendering(res.commandBuffer, &renderInfo);
 
