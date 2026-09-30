@@ -803,17 +803,17 @@ bool App::createVulkanInstance() {
     // Instance extensions
     uint32_t extensionCount = 0;
     const char** windowExtensions = glfwGetRequiredInstanceExtensions(&extensionCount);
-    std::vector<const char*> requestedExtensions;
+    std::vector<const char*> requiredExtensions;
     for (uint32_t i = 0; i < extensionCount; ++i)
-        requestedExtensions.push_back(windowExtensions[i]);
+        requiredExtensions.push_back(windowExtensions[i]);
 #ifndef NDEBUG
-    requestedExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    requiredExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 #endif
 
     // Instance layers
-    std::vector<const char*> requestedLayers;
+    std::vector<const char*> requiredLayers;
 #ifndef NDEBUG
-    requestedLayers.push_back("VK_LAYER_KHRONOS_validation");
+    requiredLayers.push_back("VK_LAYER_KHRONOS_validation");
 #endif
 
     // Debug messenger
@@ -829,10 +829,10 @@ bool App::createVulkanInstance() {
     instanceInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     instanceInfo.pNext = &debugInfo;
     instanceInfo.pApplicationInfo = &appInfo;
-    instanceInfo.enabledExtensionCount = static_cast<uint32_t>(requestedExtensions.size());
-    instanceInfo.ppEnabledExtensionNames = requestedExtensions.data();
-    instanceInfo.enabledLayerCount = static_cast<uint32_t>(requestedLayers.size());
-    instanceInfo.ppEnabledLayerNames = requestedLayers.data();
+    instanceInfo.enabledExtensionCount = static_cast<uint32_t>(requiredExtensions.size());
+    instanceInfo.ppEnabledExtensionNames = requiredExtensions.data();
+    instanceInfo.enabledLayerCount = static_cast<uint32_t>(requiredExtensions.size());
+    instanceInfo.ppEnabledLayerNames = requiredLayers.data();
 
     if (vkCreateInstance(&instanceInfo, nullptr, &instance) != VK_SUCCESS)
         return false;
