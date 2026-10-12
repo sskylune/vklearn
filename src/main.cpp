@@ -29,8 +29,10 @@ int main() {
 
     App app(handler);
 
-    if (app.init())
+    if (app.init()) {
+        app.loadData();
         app.loop();
+    }
     app.exit();
 
     return 0;

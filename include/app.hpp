@@ -7,8 +7,61 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <vma/vk_mem_alloc.h>
+#include <glm/glm.hpp>
+#include <tiny_gltf_v3.h>
 
 #include <vector>
+#include <filesystem>
+namespace fs = std::filesystem;
+
+struct SubMesh {
+    uint64_t vertexStart = 0;
+    uint64_t vertexCount = 0;
+    uint64_t indexStart = 0;
+    uint64_t indexCount = 0;
+    uint32_t materialId = 0;
+};
+
+struct Mesh {
+    std::string name;
+    std::vector<SubMesh> subMeshes;
+};
+
+struct Material {
+    glm::vec4 baseColor = glm::vec4(1, 1, 1, 1);
+    uint32_t textureId = 0;
+};
+
+struct Texture {
+    uint32_t imageId = 0;
+    uint32_t samplerId = 0;
+};
+
+struct GPUbuffer {
+    VkBuffer buffer = nullptr;
+    uint64_t deviceAddress = 0;
+    VmaAllocation allocation = nullptr;
+};
+
+struct GPUimage {
+    VkImage image = nullptr;
+    VkImageView imageView = nullptr;
+    VmaAllocation allocation = nullptr;
+};
+
+struct Image {
+    int width;
+    int height;
+    int channels;
+    std::byte* data;
+};
+
+struct Vertex {
+    glm::vec3 pos;
+    glm::vec3 color;
+    glm::vec3 normal;
+    glm::vec2 uv;
+};
 
 class App {
 public:
@@ -16,6 +69,7 @@ public:
         : log(&handler) {}
 
     [[nodiscard]] bool init();
+    bool loadData();
     void loop();
     void exit();
 
@@ -33,32 +87,32 @@ private:
     bool createWindow();
 
     // Vulkan instance
-    VkInstance instance = VK_NULL_HANDLE;
+    VkInstance instance = nullptr;
     bool createVulkanInstance();
 
     // Surface
-    VkSurfaceKHR surface = VK_NULL_HANDLE;
+    VkSurfaceKHR surface = nullptr;
     bool createVulkanSurface();
 
     // Physical device
-    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+    VkPhysicalDevice physicalDevice = nullptr;
     bool pickPhysicalDevice();
 
     // Graphics queue
-    VkQueue gfxQueue = VK_NULL_HANDLE;
+    VkQueue gfxQueue = nullptr;
     uint32_t gfxQueueIndex = 0;
     bool findGraphicsQueue();
 
     // Device
-    VkDevice device = VK_NULL_HANDLE;
+    VkDevice device = nullptr;
     bool createDevice();
 
     // VMA
-    VmaAllocator vmaAllocator = VK_NULL_HANDLE;
+    VmaAllocator vmaAllocator = nullptr;
     bool initVMA();
 
     // Swapchain
-    VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+    VkSwapchainKHR swapchain = nullptr;
     VkExtent2D swapchainExtent { .width = Config::SCR_WIDTH, .height = Config::SCR_HEIGHT };
 
     VkFormat swapchainFormat;
@@ -66,12 +120,12 @@ private:
     VkPresentModeKHR swapchainPresentMode;
 
     struct SwapchainResources {
-        VkImage image = VK_NULL_HANDLE;
-        VkImageView imageView = VK_NULL_HANDLE;
+        VkImage image = nullptr;
+        VkImageView imageView = nullptr;
         // Depth
-        VkImage depthImage = VK_NULL_HANDLE;
-        VkImageView depthImageView = VK_NULL_HANDLE;
-        VmaAllocation depthAllocation = VK_NULL_HANDLE;
+        VkImage depthImage = nullptr;
+        VkImageView depthImageView = nullptr;
+        VmaAllocation depthAllocation = nullptr;
     };
     std::vector<SwapchainResources> swapchainResources;
 
@@ -83,21 +137,21 @@ private:
     // Graphics pipeline
     VkShaderModule createShaderModule(const std::string& filename);
 
-    VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-    VkPipeline pipeline = VK_NULL_HANDLE;
+    VkPipelineLayout pipelineLayout = nullptr;
+    VkPipeline pipeline = nullptr;
     bool createGraphicsPipeline();
 
     // Synchronization
     struct FrameResources {
-        VkCommandPool commandPool = VK_NULL_HANDLE;
-        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+        VkCommandPool commandPool = nullptr;
+        VkCommandBuffer commandBuffer = nullptr;
 
-        VkSemaphore imageAcquiredSemaphore = VK_NULL_HANDLE;
-        VkSemaphore renderFinishedSemaphore = VK_NULL_HANDLE;
+        VkSemaphore imageAcquiredSemaphore = nullptr;
+        VkSemaphore renderFinishedSemaphore = nullptr;
     };
     std::array<FrameResources, Config::FRAMES_IN_FLIGHT> frameResources;
 
-    VkSemaphore timelineSemaphore = VK_NULL_HANDLE;
+    VkSemaphore timelineSemaphore = nullptr;
 
     bool createSyncResources();
     bool initFrameResources();
@@ -107,4 +161,39 @@ private:
     uint64_t nextSignalValue = Config::FRAMES_IN_FLIGHT + 1;
 
     void render();
+
+    // Transistent cmd pool & buffers
+    VkCommandPool transistentPool = nullptr;
+
+    bool createTransistentCommandPool();
+    VkCommandBuffer startTransistentCommandBuffer();
+    void submitTransistentCommandBuffer(VkCommandBuffer cmdBuffer);
+
+    // Vertices & indices
+    std::vector<Vertex> vertices;
+    std::vector<uint32_t> indices;
+
+    // Some helper functions
+    std::pair<uint32_t, GPUbuffer> createImage(VkCommandBuffer cmdBuffer, std::byte* data, uint32_t width, uint32_t height, int channels);
+    GPUbuffer createBuffer(VkBufferUsageFlags2 usage, size_t size, bool mappable, VmaMemoryUsage memoryUsage);
+    void mapCopyBufferData(const GPUbuffer& buffer, size_t offset, void* data, size_t size);
+
+    // glTF
+    void loadGLTF(const std::string& path);
+
+    std::vector<Image> loadImages(const tg3_model& model, fs::path& imageDir);
+    std::vector<uint32_t> uploadImages(const std::vector<Image>& images);
+
+    std::vector<uint32_t> loadSamplers(const tg3_model& model);
+    std::vector<uint32_t> loadTextures(const tg3_model& model, const std::vector<uint32_t>& imageIds, const std::vector<uint32_t>& samplerIds);
+    std::vector<uint32_t> loadMaterials(const tg3_model& model, const std::vector<uint32_t> textureIds);
+
+    // GPU resources
+    uint32_t fallbackPixelImageId = 0;
+
+    std::vector<GPUimage> gpuImages;
+    std::vector<GPUbuffer> gpuBuffers;
+    std::vector<VkSampler> samplers;
+    std::vector<Texture> textures;
+    std::vector<Material> materials;
 };

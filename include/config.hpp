@@ -10,4 +10,8 @@ namespace Config {
 
     // Render
     inline constexpr uint32_t FRAMES_IN_FLIGHT = 2;
+    inline constexpr uint32_t FALLBACK_COLOR = 0x808080FF;
+
+    // Memory
+    inline constexpr uint32_t MAX_TEXTURES = 1024;
 } // namespace Config
