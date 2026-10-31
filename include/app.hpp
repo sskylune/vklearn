@@ -14,7 +14,7 @@
 #include <filesystem>
 namespace fs = std::filesystem;
 
-struct SubMesh {
+struct Primitive {
     uint64_t vertexStart = 0;
     uint64_t vertexCount = 0;
     uint64_t indexStart = 0;
@@ -24,9 +24,10 @@ struct SubMesh {
 
 struct Mesh {
     std::string name;
-    std::vector<SubMesh> subMeshes;
+    std::vector<Primitive> primitives;
 };
 
+// В будущем PBR
 struct Material {
     glm::vec4 baseColor = glm::vec4(1, 1, 1, 1);
     uint32_t textureId = 0;
@@ -169,10 +170,6 @@ private:
     VkCommandBuffer startTransistentCommandBuffer();
     void submitTransistentCommandBuffer(VkCommandBuffer cmdBuffer);
 
-    // Vertices & indices
-    std::vector<Vertex> vertices;
-    std::vector<uint32_t> indices;
-
     // Some helper functions
     std::pair<uint32_t, GPUbuffer> createImage(VkCommandBuffer cmdBuffer, std::byte* data, uint32_t width, uint32_t height, int channels);
     GPUbuffer createBuffer(VkBufferUsageFlags2 usage, size_t size, bool mappable, VmaMemoryUsage memoryUsage);
@@ -186,14 +183,22 @@ private:
 
     std::vector<uint32_t> loadSamplers(const tg3_model& model);
     std::vector<uint32_t> loadTextures(const tg3_model& model, const std::vector<uint32_t>& imageIds, const std::vector<uint32_t>& samplerIds);
-    std::vector<uint32_t> loadMaterials(const tg3_model& model, const std::vector<uint32_t> textureIds);
+    std::vector<uint32_t> loadMaterials(const tg3_model& model, const std::vector<uint32_t>& textureIds);
+    std::vector<uint32_t> loadMeshes(const tg3_model& model, const std::vector<uint32_t>& materialIds);
 
     // GPU resources
     uint32_t fallbackPixelImageId = 0;
+
+    size_t vertex_offset = 0;
+    size_t index_offset = 0;
+
+    std::vector<Vertex> vertices;
+    std::vector<uint32_t> indices;
 
     std::vector<GPUimage> gpuImages;
     std::vector<GPUbuffer> gpuBuffers;
     std::vector<VkSampler> samplers;
     std::vector<Texture> textures;
     std::vector<Material> materials;
+    std::vector<Mesh> meshes;
 };

@@ -14,4 +14,7 @@ namespace Config {
 
     // Memory
     inline constexpr uint32_t MAX_TEXTURES = 1024;
+
+    // Debug
+    inline constexpr const char* MESH_DEFAULT_NAME = "Mesh";
 } // namespace Config

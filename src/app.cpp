@@ -1,6 +1,7 @@
 #define VMA_IMPLEMENTATION
 
 #include <stb_image.h>
+#include <type_traits>
 
 #include <app.hpp>
 #include <tools.hpp>
@@ -432,9 +433,110 @@ void App::loadGLTF(const std::string& path) {
     std::vector<uint32_t> samplerIds = loadSamplers(model);
     std::vector<uint32_t> textureIds = loadTextures(model, imageIds, samplerIds);
     std::vector<uint32_t> materialIds = loadMaterials(model, textureIds);
+    std::vector<uint32_t> meshIds = loadMeshes(model, materialIds);
+
+    log.info("loadGLTF: GLTF loading successful.");
 }
 
-std::vector<uint32_t> App::loadMaterials(const tg3_model& model, const std::vector<uint32_t> textureIds) {
+std::vector<uint32_t> App::loadMeshes(const tg3_model& model, const std::vector<uint32_t>& materialIds) {
+    std::vector<uint32_t> meshIds(model.meshes_count);
+
+    auto writeAttribute = [this, &model]<typename T>(T Vertex::* member, const tg3_str_int_pair& attribute) {
+        const tg3_accessor& acc = model.accessors[attribute.value];
+        const tg3_buffer_view& bv = model.buffer_views[acc.buffer_view];
+        const tg3_buffer& buff = model.buffers[bv.buffer];
+
+        const size_t buff_offset = bv.byte_offset + acc.byte_offset;
+        const size_t stride = bv.byte_stride != 0 ? bv.byte_stride : sizeof(T);
+
+        for (size_t i = 0; i < acc.count; ++i) {
+            const size_t vert_offset = buff_offset + i * stride;
+            const float* data = reinterpret_cast<const float*>(buff.data.data + vert_offset);
+
+            if constexpr (std::is_same_v<T, glm::vec3>) {
+                vertices[vertex_offset + i].*member = glm::vec3(data[0], data[1], data[2]);
+            } else if constexpr (std::is_same_v<T, glm::vec2>) {
+                vertices[vertex_offset + i].*member = glm::vec2(data[0], data[1]);
+            }
+        }
+    };
+
+    for (uint32_t i = 0; i < model.meshes_count; ++i) {
+        Mesh mesh {};
+
+        const tg3_mesh* tg3mesh = &model.meshes[i];
+        mesh.name = (tg3mesh->name.data != nullptr) ? tg3mesh->name.data : Config::MESH_DEFAULT_NAME;
+
+        mesh.primitives.resize(tg3mesh->primitives_count);
+        for (uint32_t j = 0; j < tg3mesh->primitives_count; ++j) {
+            const tg3_primitive& tg3primitive = tg3mesh->primitives[j];
+
+            mesh.primitives[j].vertexStart = vertex_offset;
+            mesh.primitives[j].materialId = (tg3primitive.material != -1) ? materialIds[tg3primitive.material] : 0;
+
+            for (uint32_t k = 0; k < tg3primitive.attributes_count; ++k) {
+                const tg3_str_int_pair& attribute = tg3primitive.attributes[k];
+                std::string_view key(attribute.key.data, attribute.key.len);
+
+                if (key == "POSITION") {
+                    const tg3_accessor& acc = model.accessors[attribute.value];
+                    assert(acc.type == TG3_TYPE_VEC3 && acc.component_type == TG3_COMPONENT_TYPE_FLOAT);
+                    assert(vertex_offset + acc.count <= vertices.size() && "Not enough space for vertices.");
+
+                    mesh.primitives[j].vertexCount = acc.count;
+                    writeAttribute(&Vertex::pos, attribute);
+                }
+                if (key == "NORMAL") {
+                    const tg3_accessor& acc = model.accessors[attribute.value];
+                    assert(acc.type == TG3_TYPE_VEC3 && acc.component_type == TG3_COMPONENT_TYPE_FLOAT);
+
+                    writeAttribute(&Vertex::normal, attribute);
+                }
+                if (key == "COLOR_0") {
+                    const tg3_accessor& acc = model.accessors[attribute.value];
+                    assert(acc.type == TG3_TYPE_VEC3 || acc.type == TG3_TYPE_VEC4);
+                    assert(acc.component_type == TG3_COMPONENT_TYPE_FLOAT);
+
+                    writeAttribute(&Vertex::color, attribute);
+                }
+                if (key == "TEXCOORD_0") {
+                    const tg3_accessor& acc = model.accessors[attribute.value];
+                    assert(acc.type == TG3_TYPE_VEC2 && acc.component_type == TG3_COMPONENT_TYPE_FLOAT);
+
+                    writeAttribute(&Vertex::uv, attribute);
+                }
+            }
+            vertex_offset += mesh.primitives[j].vertexCount;
+
+            if (tg3primitive.indices != -1) {
+                const tg3_accessor& acc = model.accessors[tg3primitive.indices];
+                const tg3_buffer_view& bv = model.buffer_views[acc.buffer_view];
+                const tg3_buffer& buff = model.buffers[bv.buffer];
+                assert(index_offset + acc.count <= indices.size() && "Not enough space for indices.");
+
+                mesh.primitives[j].indexStart = index_offset;
+                mesh.primitives[j].indexCount = acc.count;
+
+                if (acc.component_type == TG3_COMPONENT_TYPE_UNSIGNED_INT) {
+                    const uint32_t* data = reinterpret_cast<const uint32_t*>(buff.data.data + bv.byte_offset + acc.byte_offset);
+                    memcpy(&indices[index_offset], data, acc.count * sizeof(uint32_t));
+                } else if (acc.component_type == TG3_COMPONENT_TYPE_UNSIGNED_SHORT) {
+                    const uint16_t* data = reinterpret_cast<const uint16_t*>(buff.data.data + bv.byte_offset + acc.byte_offset);
+                    for (uint64_t idx = 0; idx < acc.count; ++idx)
+                        indices[index_offset + idx] = static_cast<uint32_t>(data[idx]);
+                }
+            }
+            index_offset += mesh.primitives[j].indexCount;
+        }
+
+        meshes.push_back(std::move(mesh));
+        meshIds[i] = meshes.size();
+    }
+
+    return meshIds;
+}
+
+std::vector<uint32_t> App::loadMaterials(const tg3_model& model, const std::vector<uint32_t>& textureIds) {
     std::vector<uint32_t> materialIds(model.materials_count);
     for (uint32_t i = 0; i < model.materials_count; ++i) {
         const tg3_material& material = model.materials[i];
@@ -576,8 +678,8 @@ std::pair<uint32_t, GPUbuffer> App::createImage(VkCommandBuffer cmdBuffer, std::
 
     VmaAllocationCreateInfo allocInfo {};
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
-    GPUimage gpuImage;
 
+    GPUimage gpuImage;
     if (vmaCreateImage(vmaAllocator, &imageInfo, &allocInfo, &gpuImage.image, &gpuImage.allocation, nullptr) != VK_SUCCESS) {
         log.error("createImage: Failed to allocate image.");
         return { 0, GPUbuffer {} };
