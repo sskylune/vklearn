@@ -2,6 +2,8 @@
 
 #include <stb_image.h>
 #include <type_traits>
+#include <glm/gtc/quaternion.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 #include <app.hpp>
 #include <tools.hpp>
@@ -72,8 +74,6 @@ bool App::init() {
 
 void App::loop() {
     while (!glfwWindowShouldClose(window)) {
-        glfwSwapBuffers(window);
-
         render();
 
         glfwPollEvents();
@@ -320,11 +320,13 @@ bool App::loadData() {
     vertices.resize(totalVertices);
     indices.resize(totalIndices);
 
+    uint32_t fallbackColor = Config::FALLBACK_COLOR;
+
     Image fallbackPixel {
         .width = 1,
         .height = 1,
         .channels = 4,
-        .data = reinterpret_cast<std::byte*>(Config::FALLBACK_COLOR),
+        .data = reinterpret_cast<std::byte*>(&fallbackColor),
     };
 
     VkCommandBuffer fallbackCmdBuffer = startTransistentCommandBuffer();
@@ -361,46 +363,6 @@ bool App::loadData() {
     return true;
 }
 
-std::vector<uint32_t> App::uploadImages(const std::vector<Image>& images) {
-    VkCommandBuffer cmdBuffer = startTransistentCommandBuffer();
-    std::vector<GPUbuffer> stagingBuffers;
-    stagingBuffers.reserve(images.size());
-
-    std::vector<uint32_t> imageIds(images.size());
-    for (size_t i = 0; i < images.size(); ++i) {
-        const Image& image = images[i];
-
-        if (image.data) {
-            auto [imageId, stagingBuffer] = createImage(cmdBuffer, image.data, image.width, image.height, image.channels);
-
-            imageIds[i] = imageId;
-            stagingBuffers.push_back(stagingBuffer);
-        } else {
-            imageIds[i] = fallbackPixelImageId;
-        }
-    }
-
-    submitTransistentCommandBuffer(cmdBuffer);
-
-    for (GPUbuffer& stagingBuffer : stagingBuffers)
-        vmaDestroyBuffer(vmaAllocator, stagingBuffer.buffer, stagingBuffer.allocation);
-    return imageIds;
-}
-
-std::vector<Image> App::loadImages(const tg3_model& model, fs::path& imageDir) {
-    std::vector<Image> images(model.images_count);
-    for (uint32_t i = 0; i < model.images_count; ++i) {
-        Image& image = images[i];
-        fs::path path = imageDir / model.images[i].uri.data;
-        log.info("Loading image {}/{}: {}", i + 1, model.images_count, model.images[i].uri.data);
-        image.data = reinterpret_cast<std::byte*>(stbi_load(path.string().c_str(), &image.width, &image.height, &image.channels, 4));
-
-        if (!image.data)
-            log.error("Failed to load image: {}", path.string());
-    }
-    return images;
-}
-
 void App::loadGLTF(const std::string& path) {
     if (!fs::exists(path)) {
         log.error("loadGLTF: File doesn't exist.");
@@ -435,7 +397,67 @@ void App::loadGLTF(const std::string& path) {
     std::vector<uint32_t> materialIds = loadMaterials(model, textureIds);
     std::vector<uint32_t> meshIds = loadMeshes(model, materialIds);
 
+    std::vector<uint32_t> nodeIds = loadNodes(model, meshIds);
+
     log.info("loadGLTF: GLTF loading successful.");
+}
+
+std::vector<uint32_t> App::loadNodes(const tg3_model& model, const std::vector<uint32_t>& meshIds) {
+    if (model.nodes_count == 0)
+        return {};
+
+    // Finding root nodes of scene
+    std::vector<bool> isChild(model.nodes_count, false);
+    for (uint32_t i = 0; i < model.nodes_count; ++i)
+        for (uint32_t j = 0; j < model.nodes[i].children_count; ++j)
+            isChild[model.nodes[i].children[j]] = true;
+
+    std::vector<uint32_t> nodesId(model.nodes_count);
+
+    auto processNode = [&](auto& self, uint32_t idx, int32_t parentIdx) -> void {
+        const tg3_node& tg3node = model.nodes[idx];
+        Node node {};
+
+        if (tg3node.has_matrix) {
+            node.localMtx = glm::mat4(glm::make_mat4(tg3node.matrix));
+        } else {
+            glm::vec3 t = {
+                static_cast<float>(tg3node.translation[0]),
+                static_cast<float>(tg3node.translation[1]),
+                static_cast<float>(tg3node.translation[2]),
+            };
+            glm::quat r = {
+                static_cast<float>(tg3node.rotation[3]),
+                static_cast<float>(tg3node.rotation[0]),
+                static_cast<float>(tg3node.rotation[1]),
+                static_cast<float>(tg3node.rotation[2]),
+            };
+            glm::vec3 s = {
+                static_cast<float>(tg3node.scale[0]),
+                static_cast<float>(tg3node.scale[1]),
+                static_cast<float>(tg3node.scale[2]),
+            };
+
+            node.localMtx = glm::translate(glm::mat4 { 1.0f }, t) * glm::mat4_cast(r) * glm::scale(glm::mat4 { 1.0f }, s);
+        }
+
+        node.meshId = (tg3node.mesh != -1) ? meshIds[tg3node.mesh] - 1 : -1;
+        node.parentId = parentIdx;
+
+        int32_t currIdx = static_cast<int32_t>(nodes.size());
+        nodes.push_back(std::move(node));
+        nodesId[idx] = nodes.size();
+
+        for (uint32_t i = 0; i < tg3node.children_count; ++i)
+            self(self, static_cast<uint32_t>(tg3node.children[i]), currIdx);
+    };
+
+    // Processing nodes for every root
+    for (uint32_t i = 0; i < model.nodes_count; ++i)
+        if (!isChild[i])
+            processNode(processNode, i, -1);
+
+    return nodesId;
 }
 
 std::vector<uint32_t> App::loadMeshes(const tg3_model& model, const std::vector<uint32_t>& materialIds) {
@@ -625,6 +647,46 @@ std::vector<uint32_t> App::loadSamplers(const tg3_model& model) {
     }
 
     return samplerIds;
+}
+
+std::vector<uint32_t> App::uploadImages(const std::vector<Image>& images) {
+    VkCommandBuffer cmdBuffer = startTransistentCommandBuffer();
+    std::vector<GPUbuffer> stagingBuffers;
+    stagingBuffers.reserve(images.size());
+
+    std::vector<uint32_t> imageIds(images.size());
+    for (size_t i = 0; i < images.size(); ++i) {
+        const Image& image = images[i];
+
+        if (image.data) {
+            auto [imageId, stagingBuffer] = createImage(cmdBuffer, image.data, image.width, image.height, image.channels);
+
+            imageIds[i] = imageId;
+            stagingBuffers.push_back(stagingBuffer);
+        } else {
+            imageIds[i] = fallbackPixelImageId;
+        }
+    }
+
+    submitTransistentCommandBuffer(cmdBuffer);
+
+    for (GPUbuffer& stagingBuffer : stagingBuffers)
+        vmaDestroyBuffer(vmaAllocator, stagingBuffer.buffer, stagingBuffer.allocation);
+    return imageIds;
+}
+
+std::vector<Image> App::loadImages(const tg3_model& model, fs::path& imageDir) {
+    std::vector<Image> images(model.images_count);
+    for (uint32_t i = 0; i < model.images_count; ++i) {
+        Image& image = images[i];
+        fs::path path = imageDir / model.images[i].uri.data;
+        log.info("Loading image {}/{}: {}", i + 1, model.images_count, model.images[i].uri.data);
+        image.data = reinterpret_cast<std::byte*>(stbi_load(path.string().c_str(), &image.width, &image.height, &image.channels, 4));
+
+        if (!image.data)
+            log.error("Failed to load image: {}", path.string());
+    }
+    return images;
 }
 
 GPUbuffer App::createBuffer(VkBufferUsageFlags2 usage, size_t size, bool mappable, VmaMemoryUsage memoryUsage) {
@@ -1156,7 +1218,7 @@ bool App::createDevice() {
     VkPhysicalDeviceFeatures2 supported { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &supported12 };
     vkGetPhysicalDeviceFeatures2(physicalDevice, &supported);
 
-    if (!supported13.dynamicRendering || !supported13.synchronization2 || !supported12.timelineSemaphore) {
+    if (!supported13.dynamicRendering || !supported13.synchronization2 || !supported12.timelineSemaphore || !supported12.bufferDeviceAddress) {
         log.fatal("Physical device doesn't meet the feature requirements.");
         return false;
     }
@@ -1175,6 +1237,7 @@ bool App::createDevice() {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
         .pNext = &features13,
         .timelineSemaphore = VK_TRUE,
+        .bufferDeviceAddress = VK_TRUE,
     };
     VkPhysicalDeviceFeatures2 features {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
@@ -1353,7 +1416,7 @@ bool App::createVulkanInstance() {
     instanceInfo.pApplicationInfo = &appInfo;
     instanceInfo.enabledExtensionCount = static_cast<uint32_t>(requiredExtensions.size());
     instanceInfo.ppEnabledExtensionNames = requiredExtensions.data();
-    instanceInfo.enabledLayerCount = static_cast<uint32_t>(requiredExtensions.size());
+    instanceInfo.enabledLayerCount = static_cast<uint32_t>(requiredLayers.size());
     instanceInfo.ppEnabledLayerNames = requiredLayers.data();
 
     if (vkCreateInstance(&instanceInfo, nullptr, &instance) != VK_SUCCESS)

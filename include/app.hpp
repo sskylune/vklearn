@@ -14,6 +14,13 @@
 #include <filesystem>
 namespace fs = std::filesystem;
 
+struct Node {
+    glm::mat4 localMtx { 1.0f };
+    glm::mat4 worldMtx { 1.0f };
+    int32_t parentId = -1;
+    int32_t meshId = -1;
+};
+
 struct Primitive {
     uint64_t vertexStart = 0;
     uint64_t vertexCount = 0;
@@ -181,10 +188,14 @@ private:
     std::vector<Image> loadImages(const tg3_model& model, fs::path& imageDir);
     std::vector<uint32_t> uploadImages(const std::vector<Image>& images);
 
+    // Resources
     std::vector<uint32_t> loadSamplers(const tg3_model& model);
     std::vector<uint32_t> loadTextures(const tg3_model& model, const std::vector<uint32_t>& imageIds, const std::vector<uint32_t>& samplerIds);
     std::vector<uint32_t> loadMaterials(const tg3_model& model, const std::vector<uint32_t>& textureIds);
     std::vector<uint32_t> loadMeshes(const tg3_model& model, const std::vector<uint32_t>& materialIds);
+
+    // Scene
+    std::vector<uint32_t> loadNodes(const tg3_model& model, const std::vector<uint32_t>& meshIds);
 
     // GPU resources
     uint32_t fallbackPixelImageId = 0;
@@ -201,4 +212,5 @@ private:
     std::vector<Texture> textures;
     std::vector<Material> materials;
     std::vector<Mesh> meshes;
+    std::vector<Node> nodes;
 };
