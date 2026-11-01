@@ -181,6 +181,7 @@ private:
     std::pair<uint32_t, GPUbuffer> createImage(VkCommandBuffer cmdBuffer, std::byte* data, uint32_t width, uint32_t height, int channels);
     GPUbuffer createBuffer(VkBufferUsageFlags2 usage, size_t size, bool mappable, VmaMemoryUsage memoryUsage);
     void mapCopyBufferData(const GPUbuffer& buffer, size_t offset, void* data, size_t size);
+    uint32_t addBuffer(const GPUbuffer& buffer);
 
     // glTF
     void loadGLTF(const std::string& path);
@@ -197,20 +198,24 @@ private:
     // Scene
     std::vector<uint32_t> loadNodes(const tg3_model& model, const std::vector<uint32_t>& meshIds);
 
-    // GPU resources
+    // Resources
+    void freeResources();
     uint32_t fallbackPixelImageId = 0;
 
-    size_t vertex_offset = 0;
-    size_t index_offset = 0;
-
+    // CPU resources
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
+    std::vector<Mesh> meshes;
+    std::vector<Node> nodes;
+    size_t vertexOffset = 0;
+    size_t indexOffset = 0;
 
+    // GPU resources
     std::vector<GPUimage> gpuImages;
     std::vector<GPUbuffer> gpuBuffers;
     std::vector<VkSampler> samplers;
     std::vector<Texture> textures;
     std::vector<Material> materials;
-    std::vector<Mesh> meshes;
-    std::vector<Node> nodes;
+    uint32_t vertexBufferId = 0;
+    uint32_t indexBufferId = 0;
 };

@@ -83,6 +83,8 @@ void App::loop() {
 void App::exit() {
     vkDeviceWaitIdle(device);
 
+    freeResources();
+
     vkDestroyCommandPool(device, transistentPool, nullptr);
 
     vkDestroySemaphore(device, timelineSemaphore, nullptr);
@@ -107,6 +109,24 @@ void App::exit() {
     vkDestroyInstance(instance, nullptr);
 
     glfwTerminate();
+}
+
+void App::freeResources() {
+    for (const auto& image : gpuImages) {
+        vkDestroyImageView(device, image.imageView, nullptr);
+        vmaDestroyImage(vmaAllocator, image.image, image.allocation);
+    }
+    gpuImages.clear();
+
+    for (const auto& buffer : gpuBuffers) {
+        vmaDestroyBuffer(vmaAllocator, buffer.buffer, buffer.allocation);
+    }
+    gpuBuffers.clear();
+
+    for (const auto& sampler : samplers) {
+        vkDestroySampler(device, sampler, nullptr);
+    }
+    samplers.clear();
 }
 
 void App::render() {
@@ -360,6 +380,75 @@ bool App::loadData() {
 
     loadGLTF("D:\\models\\de_dust\\scene.gltf");
 
+    // Staging buffers for vertices & indices
+    GPUbuffer vertexStagingBuffer = createBuffer(VK_BUFFER_USAGE_2_TRANSFER_SRC_BIT, vertexBufferBytes, true, VMA_MEMORY_USAGE_AUTO);
+    if (!vertexStagingBuffer.buffer) {
+        log.error("Failed to create vertex staging buffer.");
+        return false;
+    }
+
+    GPUbuffer indexStagingBuffer = createBuffer(VK_BUFFER_USAGE_2_TRANSFER_SRC_BIT, indexBufferBytes, true, VMA_MEMORY_USAGE_AUTO);
+    if (!indexStagingBuffer.buffer) {
+        log.error("Failed to create index staging buffer.");
+        return false;
+    }
+
+    // Vertex buffer
+    GPUbuffer vertexBuffer = createBuffer(
+        VK_BUFFER_USAGE_2_TRANSFER_DST_BIT | VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT, vertexBufferBytes, false, VMA_MEMORY_USAGE_AUTO);
+    if (!vertexBuffer.buffer) {
+        log.error("Failed to create vertex buffer.");
+        return false;
+    }
+    vertexBufferId = addBuffer(vertexBuffer);
+    mapCopyBufferData(vertexStagingBuffer, 0, vertices.data(), vertexBufferBytes);
+
+    // Index buffer
+    GPUbuffer indexBuffer =
+        createBuffer(VK_BUFFER_USAGE_2_TRANSFER_DST_BIT | VK_BUFFER_USAGE_2_INDEX_BUFFER_BIT, indexBufferBytes, false, VMA_MEMORY_USAGE_AUTO);
+    if (!indexBuffer.buffer) {
+        log.error("Failed to create index buffer.");
+        return false;
+    }
+    indexBufferId = addBuffer(indexBuffer);
+    mapCopyBufferData(indexStagingBuffer, 0, indices.data(), indexBufferBytes);
+
+    // Transfer data to buffers
+    VkCommandBuffer cmdBuffer = startTransistentCommandBuffer();
+
+    // Vertex buffer
+    VkBufferCopy2 copyVertices {};
+    copyVertices.sType = VK_STRUCTURE_TYPE_BUFFER_COPY_2;
+    copyVertices.size = vertexBufferBytes;
+
+    VkCopyBufferInfo2 copyVerticesInfo {};
+    copyVerticesInfo.sType = VK_STRUCTURE_TYPE_COPY_BUFFER_INFO_2;
+    copyVerticesInfo.srcBuffer = vertexStagingBuffer.buffer;
+    copyVerticesInfo.dstBuffer = vertexBuffer.buffer;
+    copyVerticesInfo.regionCount = 1;
+    copyVerticesInfo.pRegions = &copyVertices;
+
+    vkCmdCopyBuffer2(cmdBuffer, &copyVerticesInfo);
+
+    // Index buffer
+    VkBufferCopy2 copyIndices {};
+    copyIndices.sType = VK_STRUCTURE_TYPE_BUFFER_COPY_2;
+    copyIndices.size = indexBufferBytes;
+
+    VkCopyBufferInfo2 copyIndicesInfo {};
+    copyIndicesInfo.sType = VK_STRUCTURE_TYPE_COPY_BUFFER_INFO_2;
+    copyIndicesInfo.srcBuffer = indexStagingBuffer.buffer;
+    copyIndicesInfo.dstBuffer = indexBuffer.buffer;
+    copyIndicesInfo.regionCount = 1;
+    copyIndicesInfo.pRegions = &copyIndices;
+
+    vkCmdCopyBuffer2(cmdBuffer, &copyIndicesInfo);
+
+    submitTransistentCommandBuffer(cmdBuffer);
+
+    vmaDestroyBuffer(vmaAllocator, vertexStagingBuffer.buffer, vertexStagingBuffer.allocation);
+    vmaDestroyBuffer(vmaAllocator, indexStagingBuffer.buffer, indexStagingBuffer.allocation);
+
     return true;
 }
 
@@ -396,7 +485,6 @@ void App::loadGLTF(const std::string& path) {
     std::vector<uint32_t> textureIds = loadTextures(model, imageIds, samplerIds);
     std::vector<uint32_t> materialIds = loadMaterials(model, textureIds);
     std::vector<uint32_t> meshIds = loadMeshes(model, materialIds);
-
     std::vector<uint32_t> nodeIds = loadNodes(model, meshIds);
 
     tg3_model_free(&model);
@@ -472,9 +560,9 @@ std::vector<uint32_t> App::loadMeshes(const tg3_model& model, const std::vector<
             const float* data = reinterpret_cast<const float*>(buff.data.data + vert_offset);
 
             if constexpr (std::is_same_v<T, glm::vec3>) {
-                vertices[vertex_offset + i].*member = glm::vec3(data[0], data[1], data[2]);
+                vertices[vertexOffset + i].*member = glm::vec3(data[0], data[1], data[2]);
             } else if constexpr (std::is_same_v<T, glm::vec2>) {
-                vertices[vertex_offset + i].*member = glm::vec2(data[0], data[1]);
+                vertices[vertexOffset + i].*member = glm::vec2(data[0], data[1]);
             }
         }
     };
@@ -489,7 +577,7 @@ std::vector<uint32_t> App::loadMeshes(const tg3_model& model, const std::vector<
         for (uint32_t j = 0; j < tg3mesh->primitives_count; ++j) {
             const tg3_primitive& tg3primitive = tg3mesh->primitives[j];
 
-            mesh.primitives[j].vertexStart = vertex_offset;
+            mesh.primitives[j].vertexStart = vertexOffset;
             mesh.primitives[j].materialId = (tg3primitive.material != -1) ? materialIds[tg3primitive.material] : 0;
 
             for (uint32_t k = 0; k < tg3primitive.attributes_count; ++k) {
@@ -499,7 +587,7 @@ std::vector<uint32_t> App::loadMeshes(const tg3_model& model, const std::vector<
                 if (key == "POSITION") {
                     const tg3_accessor& acc = model.accessors[attribute.value];
                     assert(acc.type == TG3_TYPE_VEC3 && acc.component_type == TG3_COMPONENT_TYPE_FLOAT);
-                    assert(vertex_offset + acc.count <= vertices.size() && "Not enough space for vertices.");
+                    assert(vertexOffset + acc.count <= vertices.size() && "Not enough space for vertices.");
 
                     mesh.primitives[j].vertexCount = acc.count;
                     writeAttribute(&Vertex::pos, attribute);
@@ -524,27 +612,27 @@ std::vector<uint32_t> App::loadMeshes(const tg3_model& model, const std::vector<
                     writeAttribute(&Vertex::uv, attribute);
                 }
             }
-            vertex_offset += mesh.primitives[j].vertexCount;
+            vertexOffset += mesh.primitives[j].vertexCount;
 
             if (tg3primitive.indices != -1) {
                 const tg3_accessor& acc = model.accessors[tg3primitive.indices];
                 const tg3_buffer_view& bv = model.buffer_views[acc.buffer_view];
                 const tg3_buffer& buff = model.buffers[bv.buffer];
-                assert(index_offset + acc.count <= indices.size() && "Not enough space for indices.");
+                assert(indexOffset + acc.count <= indices.size() && "Not enough space for indices.");
 
-                mesh.primitives[j].indexStart = index_offset;
+                mesh.primitives[j].indexStart = indexOffset;
                 mesh.primitives[j].indexCount = acc.count;
 
                 if (acc.component_type == TG3_COMPONENT_TYPE_UNSIGNED_INT) {
                     const uint32_t* data = reinterpret_cast<const uint32_t*>(buff.data.data + bv.byte_offset + acc.byte_offset);
-                    memcpy(&indices[index_offset], data, acc.count * sizeof(uint32_t));
+                    memcpy(&indices[indexOffset], data, acc.count * sizeof(uint32_t));
                 } else if (acc.component_type == TG3_COMPONENT_TYPE_UNSIGNED_SHORT) {
                     const uint16_t* data = reinterpret_cast<const uint16_t*>(buff.data.data + bv.byte_offset + acc.byte_offset);
                     for (uint64_t idx = 0; idx < acc.count; ++idx)
-                        indices[index_offset + idx] = static_cast<uint32_t>(data[idx]);
+                        indices[indexOffset + idx] = static_cast<uint32_t>(data[idx]);
                 }
             }
-            index_offset += mesh.primitives[j].indexCount;
+            indexOffset += mesh.primitives[j].indexCount;
         }
 
         meshes.push_back(std::move(mesh));
@@ -685,6 +773,11 @@ std::vector<Image> App::loadImages(const tg3_model& model, fs::path& imageDir) {
     return images;
 }
 
+uint32_t App::addBuffer(const GPUbuffer& buffer) {
+    gpuBuffers.push_back(buffer);
+    return gpuBuffers.size();
+}
+
 GPUbuffer App::createBuffer(VkBufferUsageFlags2 usage, size_t size, bool mappable, VmaMemoryUsage memoryUsage) {
     VkBufferCreateInfo bufferInfo {};
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -702,7 +795,13 @@ GPUbuffer App::createBuffer(VkBufferUsageFlags2 usage, size_t size, bool mappabl
         return GPUbuffer {};
     }
 
-    // some code here later
+    if (usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) {
+        VkBufferDeviceAddressInfo vertBdaInfo {};
+        vertBdaInfo.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+        vertBdaInfo.buffer = gpuBuffer.buffer;
+
+        gpuBuffer.deviceAddress = vkGetBufferDeviceAddress(device, &vertBdaInfo);
+    }
 
     return gpuBuffer;
 }
