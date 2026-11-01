@@ -399,18 +399,13 @@ void App::loadGLTF(const std::string& path) {
 
     std::vector<uint32_t> nodeIds = loadNodes(model, meshIds);
 
+    tg3_model_free(&model);
     log.info("loadGLTF: GLTF loading successful.");
 }
 
 std::vector<uint32_t> App::loadNodes(const tg3_model& model, const std::vector<uint32_t>& meshIds) {
     if (model.nodes_count == 0)
         return {};
-
-    // Finding root nodes of scene
-    std::vector<bool> isChild(model.nodes_count, false);
-    for (uint32_t i = 0; i < model.nodes_count; ++i)
-        for (uint32_t j = 0; j < model.nodes[i].children_count; ++j)
-            isChild[model.nodes[i].children[j]] = true;
 
     std::vector<uint32_t> nodesId(model.nodes_count);
 
@@ -452,10 +447,11 @@ std::vector<uint32_t> App::loadNodes(const tg3_model& model, const std::vector<u
             self(self, static_cast<uint32_t>(tg3node.children[i]), currIdx);
     };
 
-    // Processing nodes for every root
-    for (uint32_t i = 0; i < model.nodes_count; ++i)
-        if (!isChild[i])
-            processNode(processNode, i, -1);
+    if (model.scenes_count > 0) {
+        const tg3_scene& scene = model.scenes[model.default_scene != -1 ? model.default_scene : 0];
+        for (uint32_t i = 0; i < scene.nodes_count; ++i)
+            processNode(processNode, scene.nodes[i], -1);
+    }
 
     return nodesId;
 }
