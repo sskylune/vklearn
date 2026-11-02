@@ -14,6 +14,8 @@
 #include <filesystem>
 namespace fs = std::filesystem;
 
+struct RenderItem {};
+
 struct Node {
     glm::mat4 localMtx { 1.0f };
     glm::mat4 worldMtx { 1.0f };
@@ -62,6 +64,12 @@ struct Image {
     int height;
     int channels;
     std::byte* data;
+};
+
+struct FrameConstants {
+    uint64_t vertexBufferAddress = 0;
+    uint64_t materialBufferAddress = 0;
+    uint64_t renderItemBufferAddress = 0;
 };
 
 struct Vertex {
@@ -142,6 +150,14 @@ private:
     bool createSwapchain();
     void destroySwapchain();
 
+    // Descriptor sets
+    VkDescriptorPool glDescPool = nullptr;
+    VkDescriptorSetLayout glDescSetLayout = nullptr;
+    VkDescriptorSet glDescSet = nullptr;
+
+    bool createDescriptorSets();
+    void updateTextureDescriptors() const;
+
     // Graphics pipeline
     VkShaderModule createShaderModule(const std::string& filename);
 
@@ -183,23 +199,20 @@ private:
     void mapCopyBufferData(const GPUbuffer& buffer, size_t offset, void* data, size_t size);
     uint32_t addBuffer(const GPUbuffer& buffer);
 
-    // glTF
+    // Resources
     void loadGLTF(const std::string& path);
 
     std::vector<Image> loadImages(const tg3_model& model, fs::path& imageDir);
     std::vector<uint32_t> uploadImages(const std::vector<Image>& images);
 
-    // Resources
     std::vector<uint32_t> loadSamplers(const tg3_model& model);
     std::vector<uint32_t> loadTextures(const tg3_model& model, const std::vector<uint32_t>& imageIds, const std::vector<uint32_t>& samplerIds);
     std::vector<uint32_t> loadMaterials(const tg3_model& model, const std::vector<uint32_t>& textureIds);
     std::vector<uint32_t> loadMeshes(const tg3_model& model, const std::vector<uint32_t>& materialIds);
-
-    // Scene
     std::vector<uint32_t> loadNodes(const tg3_model& model, const std::vector<uint32_t>& meshIds);
 
-    // Resources
-    void freeResources();
+    void freeData();
+
     uint32_t fallbackPixelImageId = 0;
 
     // CPU resources
@@ -218,4 +231,5 @@ private:
     std::vector<Material> materials;
     uint32_t vertexBufferId = 0;
     uint32_t indexBufferId = 0;
+    uint32_t materialBufferId = 0;
 };

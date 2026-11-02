@@ -54,6 +54,11 @@ bool App::init() {
         return false;
     }
 
+    if (!createDescriptorSets()) {
+        log.fatal("Failed to create descriptor sets.");
+        return false;
+    }
+
     if (!createGraphicsPipeline()) {
         log.fatal("Failed to create graphics pipeline.");
         return false;
@@ -83,7 +88,10 @@ void App::loop() {
 void App::exit() {
     vkDeviceWaitIdle(device);
 
-    freeResources();
+    vkDestroyDescriptorPool(device, glDescPool, nullptr);
+    vkDestroyDescriptorSetLayout(device, glDescSetLayout, nullptr);
+
+    freeData();
 
     vkDestroyCommandPool(device, transistentPool, nullptr);
 
@@ -111,7 +119,7 @@ void App::exit() {
     glfwTerminate();
 }
 
-void App::freeResources() {
+void App::freeData() {
     for (const auto& image : gpuImages) {
         vkDestroyImageView(device, image.imageView, nullptr);
         vmaDestroyImage(vmaAllocator, image.image, image.allocation);
@@ -449,7 +457,46 @@ bool App::loadData() {
     vmaDestroyBuffer(vmaAllocator, vertexStagingBuffer.buffer, vertexStagingBuffer.allocation);
     vmaDestroyBuffer(vmaAllocator, indexStagingBuffer.buffer, indexStagingBuffer.allocation);
 
+    updateTextureDescriptors();
+
+    // Material buffer
+    const size_t materialDataBytes = materials.size() * sizeof(Material);
+    GPUbuffer materialBuffer = createBuffer(
+        VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT, materialDataBytes, true, VMA_MEMORY_USAGE_AUTO);
+    if (!materialBuffer.buffer) {
+        log.error("Failed to create material buffer.");
+        return false;
+    }
+    materialBufferId = addBuffer(materialBuffer);
+    mapCopyBufferData(materialBuffer, 0, materials.data(), materialDataBytes);
+
     return true;
+}
+
+void App::updateTextureDescriptors() const {
+    if (textures.empty())
+        return;
+
+    std::vector<VkDescriptorImageInfo> imageDescriptors;
+    imageDescriptors.reserve(textures.size());
+    for (const auto& texture : textures) {
+        imageDescriptors.push_back({
+            .sampler = samplers[texture.samplerId - 1],
+            .imageView = gpuImages[texture.imageId - 1].imageView,
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        });
+    }
+
+    VkWriteDescriptorSet writeDescSet {};
+    writeDescSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writeDescSet.dstSet = glDescSet;
+    writeDescSet.dstBinding = 0;
+    writeDescSet.dstArrayElement = 0;
+    writeDescSet.descriptorCount = static_cast<uint32_t>(imageDescriptors.size());
+    writeDescSet.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writeDescSet.pImageInfo = imageDescriptors.data();
+
+    vkUpdateDescriptorSets(device, 1, &writeDescSet, 0, nullptr);
 }
 
 void App::loadGLTF(const std::string& path) {
@@ -1038,10 +1085,17 @@ bool App::createSyncResources() {
 }
 
 bool App::createGraphicsPipeline() {
+    VkPushConstantRange pushConstantRange {};
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushConstantRange.offset = 0;
+    pushConstantRange.size = sizeof(FrameConstants);
+
     VkPipelineLayoutCreateInfo layoutInfo {};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.setLayoutCount = 0;
-    layoutInfo.pushConstantRangeCount = 0;
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &glDescSetLayout;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushConstantRange;
 
     if (vkCreatePipelineLayout(device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
         log.fatal("Failed to create pipeline layout.");
@@ -1141,6 +1195,65 @@ bool App::createGraphicsPipeline() {
 
     vkDestroyShaderModule(device, vertShader, nullptr);
     vkDestroyShaderModule(device, fragShader, nullptr);
+
+    return true;
+}
+
+bool App::createDescriptorSets() {
+    // Descriptor pool
+    VkDescriptorPoolSize poolSize {};
+    poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSize.descriptorCount = Config::MAX_TEXTURES;
+
+    VkDescriptorPoolCreateInfo poolInfo {};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
+    poolInfo.maxSets = 1;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+
+    if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &glDescPool) != VK_SUCCESS) {
+        log.fatal("Failed to create global descriptor pool.");
+        return false;
+    }
+
+    // Descriptor layout
+    VkDescriptorSetLayoutBinding binding {};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = Config::MAX_TEXTURES;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorBindingFlags flags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+
+    VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo {};
+    flagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+    flagsInfo.bindingCount = 1;
+    flagsInfo.pBindingFlags = &flags;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo {};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.pNext = &flagsInfo;
+    layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = &binding;
+
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &glDescSetLayout) != VK_SUCCESS) {
+        log.fatal("Failed to create global descriptor set layout.");
+        return false;
+    }
+
+    // Descriptor set
+    VkDescriptorSetAllocateInfo allocInfo {};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = glDescPool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &glDescSetLayout;
+
+    if (vkAllocateDescriptorSets(device, &allocInfo, &glDescSet) != VK_SUCCESS) {
+        log.fatal("Failed to allocate global descriptor set.");
+        return false;
+    }
 
     return true;
 }
