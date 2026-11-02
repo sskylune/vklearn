@@ -186,12 +186,12 @@ private:
 
     void render();
 
-    // Transistent cmd pool & buffers
-    VkCommandPool transistentPool = nullptr;
+    // Transient cmd pool & buffers
+    VkCommandPool transientPool = nullptr;
 
-    bool createTransistentCommandPool();
-    VkCommandBuffer startTransistentCommandBuffer();
-    void submitTransistentCommandBuffer(VkCommandBuffer cmdBuffer);
+    bool createTransientCommandPool();
+    VkCommandBuffer startTransientCommandBuffer();
+    void submitTransientCommandBuffer(VkCommandBuffer cmdBuffer);
 
     // Some helper functions
     std::pair<uint32_t, GPUbuffer> createImage(VkCommandBuffer cmdBuffer, std::byte* data, uint32_t width, uint32_t height, int channels);

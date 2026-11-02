@@ -7,6 +7,7 @@
 
 #include <app.hpp>
 #include <tools.hpp>
+#include <input.hpp>
 
 bool App::init() {
     if (!glfwInit()) {
@@ -16,6 +17,11 @@ bool App::init() {
 
     if (!createWindow()) {
         log.fatal("Failed to create GLFW window.");
+        return false;
+    }
+
+    if (!Input::init(window)) {
+        log.error("Failed to initialize input system.");
         return false;
     }
 
@@ -69,8 +75,8 @@ bool App::init() {
         return false;
     }
 
-    if (!createTransistentCommandPool()) {
-        log.fatal("Failed to create transistent command pool.");
+    if (!createTransientCommandPool()) {
+        log.fatal("Failed to create transient command pool.");
         return false;
     }
 
@@ -80,6 +86,8 @@ bool App::init() {
 void App::loop() {
     while (!glfwWindowShouldClose(window)) {
         render();
+
+        Input::update();
 
         glfwPollEvents();
     }
@@ -93,7 +101,7 @@ void App::exit() {
 
     freeData();
 
-    vkDestroyCommandPool(device, transistentPool, nullptr);
+    vkDestroyCommandPool(device, transientPool, nullptr);
 
     vkDestroySemaphore(device, timelineSemaphore, nullptr);
 
@@ -357,11 +365,11 @@ bool App::loadData() {
         .data = reinterpret_cast<std::byte*>(&fallbackColor),
     };
 
-    VkCommandBuffer fallbackCmdBuffer = startTransistentCommandBuffer();
-    auto [fallbackPixelImageId, fallfackStagingBuffer] =
+    VkCommandBuffer fallbackCmdBuffer = startTransientCommandBuffer();
+    auto [fallbackPixelImageId, fallbackStagingBuffer] =
         createImage(fallbackCmdBuffer, fallbackPixel.data, fallbackPixel.width, fallbackPixel.height, fallbackPixel.channels);
-    submitTransistentCommandBuffer(fallbackCmdBuffer);
-    vmaDestroyBuffer(vmaAllocator, fallfackStagingBuffer.buffer, fallfackStagingBuffer.allocation);
+    submitTransientCommandBuffer(fallbackCmdBuffer);
+    vmaDestroyBuffer(vmaAllocator, fallbackStagingBuffer.buffer, fallbackStagingBuffer.allocation);
 
     VkSamplerCreateInfo samplerInfo {};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -386,7 +394,7 @@ bool App::loadData() {
         .samplerId = fallbackSamplerId,
     });
 
-    loadGLTF("D:\\models\\de_dust\\scene.gltf");
+    loadGLTF(Config::MODEL_PATH);
 
     // Staging buffers for vertices & indices
     GPUbuffer vertexStagingBuffer = createBuffer(VK_BUFFER_USAGE_2_TRANSFER_SRC_BIT, vertexBufferBytes, true, VMA_MEMORY_USAGE_AUTO);
@@ -422,7 +430,7 @@ bool App::loadData() {
     mapCopyBufferData(indexStagingBuffer, 0, indices.data(), indexBufferBytes);
 
     // Transfer data to buffers
-    VkCommandBuffer cmdBuffer = startTransistentCommandBuffer();
+    VkCommandBuffer cmdBuffer = startTransientCommandBuffer();
 
     // Vertex buffer
     VkBufferCopy2 copyVertices {};
@@ -452,7 +460,7 @@ bool App::loadData() {
 
     vkCmdCopyBuffer2(cmdBuffer, &copyIndicesInfo);
 
-    submitTransistentCommandBuffer(cmdBuffer);
+    submitTransientCommandBuffer(cmdBuffer);
 
     vmaDestroyBuffer(vmaAllocator, vertexStagingBuffer.buffer, vertexStagingBuffer.allocation);
     vmaDestroyBuffer(vmaAllocator, indexStagingBuffer.buffer, indexStagingBuffer.allocation);
@@ -781,7 +789,7 @@ std::vector<uint32_t> App::loadSamplers(const tg3_model& model) {
 }
 
 std::vector<uint32_t> App::uploadImages(const std::vector<Image>& images) {
-    VkCommandBuffer cmdBuffer = startTransistentCommandBuffer();
+    VkCommandBuffer cmdBuffer = startTransientCommandBuffer();
     std::vector<GPUbuffer> stagingBuffers;
     stagingBuffers.reserve(images.size());
 
@@ -799,7 +807,7 @@ std::vector<uint32_t> App::uploadImages(const std::vector<Image>& images) {
         }
     }
 
-    submitTransistentCommandBuffer(cmdBuffer);
+    submitTransientCommandBuffer(cmdBuffer);
 
     for (GPUbuffer& stagingBuffer : stagingBuffers)
         vmaDestroyBuffer(vmaAllocator, stagingBuffer.buffer, stagingBuffer.allocation);
@@ -974,7 +982,7 @@ std::pair<uint32_t, GPUbuffer> App::createImage(VkCommandBuffer cmdBuffer, std::
     return { imageId, stagingBuffer };
 }
 
-void App::submitTransistentCommandBuffer(VkCommandBuffer cmdBuffer) {
+void App::submitTransientCommandBuffer(VkCommandBuffer cmdBuffer) {
     vkEndCommandBuffer(cmdBuffer);
 
     VkSubmitInfo submitInfo {};
@@ -985,19 +993,19 @@ void App::submitTransistentCommandBuffer(VkCommandBuffer cmdBuffer) {
     vkQueueSubmit(gfxQueue, 1, &submitInfo, nullptr);
     // Костыль, заменить на нормальную синхронизацию
     vkQueueWaitIdle(gfxQueue);
-    vkFreeCommandBuffers(device, transistentPool, 1, &cmdBuffer);
+    vkFreeCommandBuffers(device, transientPool, 1, &cmdBuffer);
 }
 
-VkCommandBuffer App::startTransistentCommandBuffer() {
+VkCommandBuffer App::startTransientCommandBuffer() {
     VkCommandBufferAllocateInfo allocInfo {};
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    allocInfo.commandPool = transistentPool;
+    allocInfo.commandPool = transientPool;
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     allocInfo.commandBufferCount = 1;
 
     VkCommandBuffer cmdBuffer = nullptr;
     if (vkAllocateCommandBuffers(device, &allocInfo, &cmdBuffer) != VK_SUCCESS) {
-        log.error("Failed to allocate transistent command buffer.");
+        log.error("Failed to allocate transient command buffer.");
         return nullptr;
     }
 
@@ -1006,21 +1014,21 @@ VkCommandBuffer App::startTransistentCommandBuffer() {
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
     if (vkBeginCommandBuffer(cmdBuffer, &beginInfo) != VK_SUCCESS) {
-        log.error("Failed to begin transistent command buffer.");
-        vkFreeCommandBuffers(device, transistentPool, 1, &cmdBuffer);
+        log.error("Failed to begin transient command buffer.");
+        vkFreeCommandBuffers(device, transientPool, 1, &cmdBuffer);
         return nullptr;
     }
 
     return cmdBuffer;
 }
 
-bool App::createTransistentCommandPool() {
+bool App::createTransientCommandPool() {
     VkCommandPoolCreateInfo poolInfo {};
     poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
     poolInfo.queueFamilyIndex = gfxQueueIndex;
 
-    if (vkCreateCommandPool(device, &poolInfo, nullptr, &transistentPool) != VK_SUCCESS)
+    if (vkCreateCommandPool(device, &poolInfo, nullptr, &transientPool) != VK_SUCCESS)
         return false;
 
     return true;
