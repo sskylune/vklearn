@@ -85,11 +85,14 @@ bool App::init() {
 
 void App::loop() {
     while (!glfwWindowShouldClose(window)) {
-        render();
+        Time::update();
 
         Input::update();
-
         glfwPollEvents();
+
+        ///
+
+        render();
     }
 }
 
@@ -184,6 +187,16 @@ void App::render() {
         default:
             break;
     }
+
+    // Camera
+    glm::vec3 cameraPos {
+        // ...
+    };
+
+    const float aspectRatio = Config::SCR_WIDTH / static_cast<float>(Config::SCR_HEIGHT);
+    glm::mat4 view = glm::lookAt(cameraPos, glm::vec3 { 0.0f }, glm::vec3 { 0.0f, 1.0f, 0.0f });
+    glm::mat4 proj = glm::perspective(glm::radians(90.0f), aspectRatio, 0.01f, 1000.0f);
+    glm::mat4 vp = proj * view;
 
     VkCommandBufferBeginInfo cmdBeginInfo {};
     cmdBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;

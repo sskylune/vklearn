@@ -85,11 +85,11 @@ public:
     }
 
     [[nodiscard]] static glm::vec2 mouseLook() {
-        return mouseDelta;
+        return mouseAccumulated;
     }
 
     [[nodiscard]] static float scroll() {
-        return scrollDelta;
+        return scrollAccumulated;
     }
 
 private:

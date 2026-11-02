@@ -11,6 +11,7 @@
 #include <tiny_gltf_v3.h>
 
 #include <vector>
+#include <chrono>
 #include <filesystem>
 namespace fs = std::filesystem;
 
@@ -77,6 +78,24 @@ struct Vertex {
     glm::vec3 color;
     glm::vec3 normal;
     glm::vec2 uv;
+};
+
+class Time {
+public:
+    static void update() {
+        auto currTime = std::chrono::steady_clock::now();
+        dt = std::chrono::duration<float>(currTime - lastTime).count();
+        lastTime = currTime;
+    }
+
+    [[nodiscard]]
+    static float deltaTime() {
+        return dt;
+    }
+
+private:
+    inline static float dt = 0.0f;
+    inline static auto lastTime = std::chrono::steady_clock::now();
 };
 
 class App {
