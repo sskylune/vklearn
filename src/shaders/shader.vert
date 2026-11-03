@@ -40,7 +40,8 @@ layout(buffer_reference, scalar) readonly buffer RenderItemPtr {
 
 layout (location = 0) out vec3 outColor;
 layout (location = 1) out vec2 outUV;
-layout (location = 2) out flat uint outMaterialId;
+layout (location = 2) out vec3 outNormal;
+layout (location = 3) out flat uint outMaterialId;
 
 void main() {
     VertexPtr vBuffer = VertexPtr(pc.vertexBufferAddress);
@@ -53,5 +54,6 @@ void main() {
 
     outColor = v.color;
     outUV = v.uv;
+    outNormal = v.normal;
     outMaterialId = ri.materialId;
 }

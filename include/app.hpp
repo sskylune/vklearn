@@ -10,12 +10,50 @@
 #include <vma/vk_mem_alloc.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
+#include <glm/ext/matrix_transform.hpp>
+#include <glm/ext/matrix_clip_space.hpp>
 #include <tiny_gltf_v3.h>
 
 #include <vector>
 #include <chrono>
 #include <filesystem>
 namespace fs = std::filesystem;
+
+struct Camera {
+    glm::vec3 pos { 0.0f };
+
+    glm::vec3 forward { 0.0f, 0.0f, 1.0f };
+    glm::vec3 right { 1.0f, 0.0f, 0.0f };
+    glm::vec3 up { 0.0f, 1.0f, 0.0f };
+
+    float fov = 90.0f;
+    float nearPlane = 0.1f;
+    float farPlane = 1000.0f;
+
+    float yaw = -90.0f;
+    float pitch = 0.0f;
+
+    void update() {
+        glm::vec3 front;
+        front.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
+        front.y = sin(glm::radians(pitch));
+        front.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
+        forward = glm::normalize(front);
+
+        right = glm::normalize(glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f)));
+        up = glm::normalize(glm::cross(right, forward));
+    }
+
+    [[nodiscard]]
+    glm::mat4 getViewMatrix() {
+        return glm::lookAt(pos, pos + forward, up);
+    }
+
+    [[nodiscard]]
+    glm::mat4 getProjectionMatrix(float aspect) {
+        return glm::perspective(glm::radians(fov), aspect, nearPlane, farPlane);
+    }
+};
 
 struct Node {
     glm::mat4 localMtx { 1.0f };
@@ -171,6 +209,7 @@ private:
     // Swapchain
     VkSwapchainKHR swapchain = nullptr;
     VkExtent2D swapchainExtent { .width = Config::SCR_WIDTH, .height = Config::SCR_HEIGHT };
+    float aspectRatio = Config::SCR_WIDTH / static_cast<float>(Config::SCR_HEIGHT);
 
     VkFormat swapchainFormat;
     VkColorSpaceKHR swapchainColorSpace;
@@ -250,9 +289,7 @@ private:
     uint32_t fallbackPixelImageId = 0;
 
     // Camera related
-    float camPitch = 0.0f;
-    float camYaw = glm::half_pi<float>();
-    float camDistance = 3.0f;
+    Camera camera;
 
     // CPU resources
     std::vector<Vertex> vertices;

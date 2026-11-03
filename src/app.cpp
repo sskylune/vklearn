@@ -85,6 +85,8 @@ bool App::init() {
 
 void App::loop() {
     float speed = 1.0f;
+    bool cursorLocked = true;
+    Input::setCursorLocked(cursorLocked);
 
     while (!glfwWindowShouldClose(window)) {
         Time::update();
@@ -92,30 +94,38 @@ void App::loop() {
         Input::update();
         glfwPollEvents();
 
-        constexpr float epsilon = 0.01f;
-        constexpr float maxPitch = glm::half_pi<float>() - epsilon;
+        constexpr float maxPitch = 89.99f;
+        constexpr float sensitivity = 0.1f;
+        const float velocity = speed * Time::deltaTime();
 
-        if (Input::isDown(GLFW_KEY_A))
-            camYaw += speed * Time::deltaTime();
-        if (Input::isDown(GLFW_KEY_D))
-            camYaw -= speed * Time::deltaTime();
-        if (Input::isDown(GLFW_KEY_W)) {
-            camDistance -= speed * Time::deltaTime();
-            camDistance = std::max(camDistance, epsilon);
+        if (Input::isPressed(GLFW_KEY_ESCAPE)) {
+            cursorLocked = !cursorLocked;
+            Input::setCursorLocked(cursorLocked);
         }
+
+        if (Input::isDown(GLFW_KEY_W))
+            camera.pos += camera.forward * velocity;
         if (Input::isDown(GLFW_KEY_S))
-            camDistance += speed * Time::deltaTime();
-        if (Input::isDown(GLFW_KEY_UP)) {
-            camPitch += speed * Time::deltaTime();
-            camPitch = std::clamp(camPitch, -maxPitch, maxPitch);
-        }
-        if (Input::isDown(GLFW_KEY_DOWN)) {
-            camPitch -= speed * Time::deltaTime();
-            camPitch = std::clamp(camPitch, -maxPitch, maxPitch);
+            camera.pos -= camera.forward * velocity;
+        if (Input::isDown(GLFW_KEY_D))
+            camera.pos += camera.right * velocity;
+        if (Input::isDown(GLFW_KEY_A))
+            camera.pos -= camera.right * velocity;
+        if (Input::isDown(GLFW_KEY_SPACE))
+            camera.pos += camera.up * velocity;
+        if (Input::isDown(GLFW_KEY_LEFT_SHIFT))
+            camera.pos -= camera.up * velocity;
+
+        if (cursorLocked) {
+            camera.pitch += -Input::mouseLook().y * sensitivity;
+            camera.yaw += Input::mouseLook().x * sensitivity;
+
+            camera.pitch = std::clamp(camera.pitch, -maxPitch, maxPitch);
+            camera.update();
         }
 
-        speed += Input::scroll();
-        speed = std::clamp(speed, 0.5f, 100.0f);
+        speed += Input::scroll() * 5.0f;
+        speed = std::clamp(speed, 1.0f, 100.0f);
 
         render();
     }
@@ -223,14 +233,9 @@ void App::render() {
             break;
     }
 
-    // Camera & VP matrix
-    glm::vec3 cameraPos(cosf(camYaw) * cosf(camPitch), sinf(camPitch), sinf(camYaw) * cosf(camPitch));
-    cameraPos *= camDistance;
-
     // Calculating per-frame View * Project matrix
-    const float aspectRatio = Config::SCR_WIDTH / static_cast<float>(Config::SCR_HEIGHT);
-    glm::mat4 view = glm::lookAt(cameraPos, glm::vec3 { 0.0f }, glm::vec3 { 0.0f, 1.0f, 0.0f });
-    glm::mat4 proj = glm::perspective(glm::radians(90.0f), aspectRatio, 0.01f, 1000.0f);
+    glm::mat4 view = camera.getViewMatrix();
+    glm::mat4 proj = camera.getProjectionMatrix(aspectRatio);
     // -y
     proj[1][1] *= -1.0f;
     glm::mat4 vp = proj * view;
@@ -1796,6 +1801,8 @@ void App::glfwFramebufferSizeCallback(GLFWwindow* window, int width, int height)
             .width = static_cast<uint32_t>(width),
             .height = static_cast<uint32_t>(height),
         };
+
+        app->aspectRatio = width / static_cast<float>(height);
 
         app->resetSwapchain = true;
     }
