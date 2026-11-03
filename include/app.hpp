@@ -8,14 +8,13 @@
 #include <GLFW/glfw3.h>
 #include <vma/vk_mem_alloc.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/constants.hpp>
 #include <tiny_gltf_v3.h>
 
 #include <vector>
 #include <chrono>
 #include <filesystem>
 namespace fs = std::filesystem;
-
-struct RenderItem {};
 
 struct Node {
     glm::mat4 localMtx { 1.0f };
@@ -65,6 +64,27 @@ struct Image {
     int height;
     int channels;
     std::byte* data;
+};
+
+struct RenderItem {
+    glm::mat4 model { 1.0f };
+    uint32_t materialId = -1;
+};
+
+struct FrameResources {
+    VkCommandPool commandPool = nullptr;
+    VkCommandBuffer commandBuffer = nullptr;
+
+    VkSemaphore imageAcquiredSemaphore = nullptr;
+    VkSemaphore renderFinishedSemaphore = nullptr;
+
+    // MDI buffer
+    GPUbuffer mdiBuffer;
+    VkDrawIndexedIndirectCommand* mdiBufferPtr = nullptr;
+
+    // Render item buffer
+    GPUbuffer renderItemBuffer;
+    RenderItem* renderItemBufferPtr = nullptr;
 };
 
 struct FrameConstants {
@@ -185,13 +205,6 @@ private:
     bool createGraphicsPipeline();
 
     // Synchronization
-    struct FrameResources {
-        VkCommandPool commandPool = nullptr;
-        VkCommandBuffer commandBuffer = nullptr;
-
-        VkSemaphore imageAcquiredSemaphore = nullptr;
-        VkSemaphore renderFinishedSemaphore = nullptr;
-    };
     std::array<FrameResources, Config::FRAMES_IN_FLIGHT> frameResources;
 
     VkSemaphore timelineSemaphore = nullptr;
@@ -233,6 +246,11 @@ private:
     void freeData();
 
     uint32_t fallbackPixelImageId = 0;
+
+    // Camera related
+    float camPitch = 0.0f;
+    float camYaw = glm::half_pi<float>();
+    float camDistance = 3.0f;
 
     // CPU resources
     std::vector<Vertex> vertices;

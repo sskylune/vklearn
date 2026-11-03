@@ -90,7 +90,29 @@ void App::loop() {
         Input::update();
         glfwPollEvents();
 
-        ///
+        constexpr float epsilon = 0.01f;
+        constexpr float maxPitch = glm::half_pi<float>() - epsilon;
+        float speed = 1.0f;
+
+        if (Input::isDown(GLFW_KEY_A))
+            camYaw += speed * Time::deltaTime();
+        if (Input::isDown(GLFW_KEY_D))
+            camYaw -= speed * Time::deltaTime();
+        if (Input::isDown(GLFW_KEY_W)) {
+            camDistance -= speed * Time::deltaTime();
+            camDistance = std::max(camDistance, epsilon);
+        }
+        if (Input::isDown(GLFW_KEY_S))
+            camDistance += speed * Time::deltaTime();
+        if (Input::isDown(GLFW_KEY_UP)) {
+            camPitch += speed * Time::deltaTime();
+            camPitch = std::clamp(camPitch, -maxPitch, maxPitch);
+        }
+        if (Input::isDown(GLFW_KEY_DOWN)) {
+            camPitch -= speed * Time::deltaTime();
+            camPitch = std::clamp(camPitch, -maxPitch, maxPitch);
+        }
+        speed += Input::scroll() * Time::deltaTime();
 
         render();
     }
@@ -108,10 +130,20 @@ void App::exit() {
 
     vkDestroySemaphore(device, timelineSemaphore, nullptr);
 
-    for (const auto& res : frameResources) {
+    for (auto& res : frameResources) {
         vkDestroyCommandPool(device, res.commandPool, nullptr);
         vkDestroySemaphore(device, res.imageAcquiredSemaphore, nullptr);
         vkDestroySemaphore(device, res.renderFinishedSemaphore, nullptr);
+
+        // MDI
+        vmaUnmapMemory(vmaAllocator, res.mdiBuffer.allocation);
+        vmaDestroyBuffer(vmaAllocator, res.mdiBuffer.buffer, res.mdiBuffer.allocation);
+        res.mdiBufferPtr = nullptr;
+
+        // Render item
+        vmaUnmapMemory(vmaAllocator, res.renderItemBuffer.allocation);
+        vmaDestroyBuffer(vmaAllocator, res.renderItemBuffer.buffer, res.renderItemBuffer.allocation);
+        res.renderItemBufferPtr = nullptr;
     }
 
     vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
@@ -188,15 +220,53 @@ void App::render() {
             break;
     }
 
-    // Camera
-    glm::vec3 cameraPos {
-        // ...
-    };
+    // Camera & VP matrix
+    glm::vec3 cameraPos(cosf(camYaw) * cosf(camPitch), sinf(camPitch), sinf(camYaw) * cosf(camPitch));
+    cameraPos *= camDistance;
 
+    // Calculating per-frame View * Project matrix
     const float aspectRatio = Config::SCR_WIDTH / static_cast<float>(Config::SCR_HEIGHT);
     glm::mat4 view = glm::lookAt(cameraPos, glm::vec3 { 0.0f }, glm::vec3 { 0.0f, 1.0f, 0.0f });
     glm::mat4 proj = glm::perspective(glm::radians(90.0f), aspectRatio, 0.01f, 1000.0f);
     glm::mat4 vp = proj * view;
+
+    uint32_t drawCount = 0;
+
+    for (auto& node : nodes) {
+        // Calculating world matrices
+        if (node.parentId != -1) {
+            const Node& parent = nodes[node.parentId];
+            node.worldMtx = parent.worldMtx * node.localMtx;
+        } else {
+            node.worldMtx = node.localMtx;
+        }
+
+        // Recording buffers
+        if (node.meshId != -1) {
+            const auto& mesh = meshes[node.meshId];
+
+            for (const auto& prim : mesh.primitives) {
+                // MDI command
+                VkDrawIndexedIndirectCommand command {};
+                command.indexCount = static_cast<uint32_t>(prim.indexCount);
+                command.instanceCount = 1;
+                command.firstIndex = static_cast<uint32_t>(prim.indexStart);
+                command.vertexOffset = static_cast<uint32_t>(prim.vertexStart);
+                command.firstInstance = drawCount;
+
+                res.mdiBufferPtr[drawCount] = command;
+
+                // Render items
+                RenderItem renderItem {};
+                renderItem.model = node.worldMtx;
+                renderItem.materialId = prim.materialId;
+
+                res.renderItemBufferPtr[drawCount] = renderItem;
+
+                drawCount++;
+            }
+        }
+    }
 
     VkCommandBufferBeginInfo cmdBeginInfo {};
     cmdBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -272,6 +342,23 @@ void App::render() {
     renderInfo.pColorAttachments = &colorAttachInfo;
     renderInfo.pDepthAttachment = &depthAttachInfo;
 
+    vkCmdBindDescriptorSets(res.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &glDescSet, 0, nullptr);
+
+    // Push constants
+    FrameConstants frameConsts;
+    GPUbuffer& vertBuffer = gpuBuffers[vertexBufferId - 1];
+    GPUbuffer& matBuffer = gpuBuffers[materialBufferId - 1];
+    frameConsts.vertexBufferAddress = vertBuffer.deviceAddress;
+    frameConsts.materialBufferAddress = matBuffer.deviceAddress;
+    frameConsts.renderItemBufferAddress = res.renderItemBuffer.deviceAddress;
+
+    vkCmdPushConstants(
+        res.commandBuffer, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(frameConsts), &frameConsts);
+
+    // Index buffer
+    GPUbuffer& indexBuffer = gpuBuffers[indexBufferId];
+    vkCmdBindIndexBuffer(res.commandBuffer, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+
     vkCmdBeginRendering(res.commandBuffer, &renderInfo);
 
     VkViewport viewport = {
@@ -289,7 +376,7 @@ void App::render() {
     vkCmdSetScissor(res.commandBuffer, 0, 1, &scissor);
 
     vkCmdBindPipeline(res.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    vkCmdDraw(res.commandBuffer, 3, 1, 0, 0);
+    vkCmdDrawIndexedIndirect(res.commandBuffer, res.mdiBuffer.buffer, 0, drawCount, sizeof(VkDrawIndexedIndirectCommand));
 
     vkCmdEndRendering(res.commandBuffer);
 
@@ -1082,6 +1169,29 @@ bool App::initFrameResources() {
             log.fatal("Failed to initialize per-frame render-finished semaphore.");
             return false;
         }
+
+        // MDI
+        const size_t mdiBufferSize = Config::MAX_RENDER_ITEMS * sizeof(VkDrawIndexedIndirectCommand);
+        res.mdiBuffer = createBuffer(VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, mdiBufferSize, true, VMA_MEMORY_USAGE_AUTO);
+
+        void* mdiBufferPtr = nullptr;
+        if (vmaMapMemory(vmaAllocator, res.mdiBuffer.allocation, &mdiBufferPtr) != VK_SUCCESS) {
+            log.fatal("Failed to map MDI buffer.");
+            return false;
+        }
+        res.mdiBufferPtr = reinterpret_cast<VkDrawIndexedIndirectCommand*>(mdiBufferPtr);
+
+        // Render item buffer
+        const size_t renderItemBufferSize = Config::MAX_RENDER_ITEMS * sizeof(RenderItem);
+        res.renderItemBuffer = createBuffer(
+            VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT, renderItemBufferSize, true, VMA_MEMORY_USAGE_AUTO);
+
+        void* renderItemBufferPtr = nullptr;
+        if (vmaMapMemory(vmaAllocator, res.renderItemBuffer.allocation, &renderItemBufferPtr) != VK_SUCCESS) {
+            log.fatal("Failed to map render item buffer.");
+            return false;
+        }
+        res.renderItemBufferPtr = reinterpret_cast<RenderItem*>(renderItemBufferPtr);
     }
 
     return true;
@@ -1447,7 +1557,8 @@ bool App::createDevice() {
     VkPhysicalDeviceFeatures2 supported { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &supported12 };
     vkGetPhysicalDeviceFeatures2(physicalDevice, &supported);
 
-    if (!supported13.dynamicRendering || !supported13.synchronization2 || !supported12.timelineSemaphore || !supported12.bufferDeviceAddress) {
+    if (!supported13.dynamicRendering || !supported13.synchronization2 || !supported12.timelineSemaphore || !supported12.bufferDeviceAddress ||
+        !supported.features.multiDrawIndirect) {
         log.fatal("Physical device doesn't meet the feature requirements.");
         return false;
     }
@@ -1471,6 +1582,7 @@ bool App::createDevice() {
     VkPhysicalDeviceFeatures2 features {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
         .pNext = &features12,
+        .features { .multiDrawIndirect = VK_TRUE },
     };
 
     std::vector<float> queuePriorities { 1.0f };
