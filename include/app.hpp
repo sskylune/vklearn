@@ -1,10 +1,11 @@
 #pragma once
 
+#define GLFW_INCLUDE_VULKAN
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+
 #include <log.hpp>
 #include <config.hpp>
-
 #include <volk.h>
-#define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <vma/vk_mem_alloc.h>
 #include <glm/glm.hpp>
@@ -88,6 +89,7 @@ struct FrameResources {
 };
 
 struct FrameConstants {
+    glm::mat4 vp { 1.0f };
     uint64_t vertexBufferAddress = 0;
     uint64_t materialBufferAddress = 0;
     uint64_t renderItemBufferAddress = 0;
@@ -95,7 +97,7 @@ struct FrameConstants {
 
 struct Vertex {
     glm::vec3 pos;
-    glm::vec3 color;
+    glm::vec3 color { 1.0f };
     glm::vec3 normal;
     glm::vec2 uv;
 };

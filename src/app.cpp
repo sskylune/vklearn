@@ -84,6 +84,8 @@ bool App::init() {
 }
 
 void App::loop() {
+    float speed = 1.0f;
+
     while (!glfwWindowShouldClose(window)) {
         Time::update();
 
@@ -92,7 +94,6 @@ void App::loop() {
 
         constexpr float epsilon = 0.01f;
         constexpr float maxPitch = glm::half_pi<float>() - epsilon;
-        float speed = 1.0f;
 
         if (Input::isDown(GLFW_KEY_A))
             camYaw += speed * Time::deltaTime();
@@ -112,7 +113,9 @@ void App::loop() {
             camPitch -= speed * Time::deltaTime();
             camPitch = std::clamp(camPitch, -maxPitch, maxPitch);
         }
-        speed += Input::scroll() * Time::deltaTime();
+
+        speed += Input::scroll();
+        speed = std::clamp(speed, 0.5f, 100.0f);
 
         render();
     }
@@ -228,6 +231,8 @@ void App::render() {
     const float aspectRatio = Config::SCR_WIDTH / static_cast<float>(Config::SCR_HEIGHT);
     glm::mat4 view = glm::lookAt(cameraPos, glm::vec3 { 0.0f }, glm::vec3 { 0.0f, 1.0f, 0.0f });
     glm::mat4 proj = glm::perspective(glm::radians(90.0f), aspectRatio, 0.01f, 1000.0f);
+    // -y
+    proj[1][1] *= -1.0f;
     glm::mat4 vp = proj * view;
 
     uint32_t drawCount = 0;
@@ -351,12 +356,13 @@ void App::render() {
     frameConsts.vertexBufferAddress = vertBuffer.deviceAddress;
     frameConsts.materialBufferAddress = matBuffer.deviceAddress;
     frameConsts.renderItemBufferAddress = res.renderItemBuffer.deviceAddress;
+    frameConsts.vp = vp;
 
     vkCmdPushConstants(
         res.commandBuffer, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(frameConsts), &frameConsts);
 
     // Index buffer
-    GPUbuffer& indexBuffer = gpuBuffers[indexBufferId];
+    GPUbuffer& indexBuffer = gpuBuffers[indexBufferId - 1];
     vkCmdBindIndexBuffer(res.commandBuffer, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 
     vkCmdBeginRendering(res.commandBuffer, &renderInfo);
@@ -366,6 +372,8 @@ void App::render() {
         .y = 0,
         .width = static_cast<float>(swapchainExtent.width),
         .height = static_cast<float>(swapchainExtent.height),
+        .minDepth = 0.0f,
+        .maxDepth = 1.0f,
     };
     vkCmdSetViewport(res.commandBuffer, 0, 1, &viewport);
 
@@ -493,6 +501,8 @@ bool App::loadData() {
         .imageId = fallbackPixelImageId,
         .samplerId = fallbackSamplerId,
     });
+
+    materials.push_back(Material { glm::vec4 { 1.0f }, 0 });
 
     loadGLTF(Config::MODEL_PATH);
 
@@ -811,7 +821,7 @@ std::vector<uint32_t> App::loadMaterials(const tg3_model& model, const std::vect
                              : 0,
         });
 
-        materialIds[i] = materials.size();
+        materialIds[i] = materials.size() - 1;
     }
     return materialIds;
 }
@@ -1039,7 +1049,7 @@ std::pair<uint32_t, GPUbuffer> App::createImage(VkCommandBuffer cmdBuffer, std::
 
     vkCmdPipelineBarrier2(cmdBuffer, &transferDepInfo);
 
-    const size_t size = width * height * channels;
+    const size_t size = width * height * 4;
     GPUbuffer stagingBuffer = createBuffer(VK_BUFFER_USAGE_2_TRANSFER_SRC_BIT, size, true, VMA_MEMORY_USAGE_AUTO_PREFER_HOST);
     mapCopyBufferData(stagingBuffer, 0, data, size);
 
@@ -1277,7 +1287,7 @@ bool App::createGraphicsPipeline() {
     rasterInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     rasterInfo.polygonMode = VK_POLYGON_MODE_FILL;
     rasterInfo.cullMode = VK_CULL_MODE_BACK_BIT;
-    rasterInfo.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    rasterInfo.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterInfo.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisampleInfo {};
@@ -1576,13 +1586,24 @@ bool App::createDevice() {
     VkPhysicalDeviceVulkan12Features features12 {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
         .pNext = &features13,
+        .descriptorIndexing = VK_TRUE,
+        .shaderInputAttachmentArrayDynamicIndexing = VK_TRUE,
+        .shaderUniformBufferArrayNonUniformIndexing = VK_TRUE,
+        .shaderSampledImageArrayNonUniformIndexing = VK_TRUE,
+        .descriptorBindingSampledImageUpdateAfterBind = VK_TRUE,
+        .descriptorBindingPartiallyBound = VK_TRUE,
+        .runtimeDescriptorArray = VK_TRUE,
+        .scalarBlockLayout = VK_TRUE,
         .timelineSemaphore = VK_TRUE,
         .bufferDeviceAddress = VK_TRUE,
     };
     VkPhysicalDeviceFeatures2 features {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
         .pNext = &features12,
-        .features { .multiDrawIndirect = VK_TRUE },
+        .features {
+            .multiDrawIndirect = VK_TRUE,
+            .shaderInt64 = VK_TRUE,
+        },
     };
 
     std::vector<float> queuePriorities { 1.0f };

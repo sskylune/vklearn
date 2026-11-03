@@ -1,11 +1,57 @@
+// clang-format off
+
 #version 460
 
-const vec3 pos[3] = vec3[](vec3(0.0, -0.5, 0.0), vec3(0.5, 0.5, 0.0), vec3(-0.5, 0.5, 0.0));
-const vec3 color[3] = vec3[](vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0));
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
-layout(location = 0) out vec3 outColor;
+struct Vertex {
+    vec3 pos;
+    vec3 color;
+    vec3 normal;
+    vec2 uv;
+};
+
+struct RenderItem {
+    mat4 model;
+    uint materialId;
+};
+
+struct Material {
+    vec4 baseColor;
+    uint textureId;
+};
+
+layout(push_constant, scalar) uniform FrameConstants {
+    mat4 vp;
+    uint64_t vertexBufferAddress;
+    uint64_t materialBufferAddress;
+    uint64_t renderItemBufferAddress;
+} pc;
+
+layout(buffer_reference, scalar) readonly buffer VertexPtr {
+    Vertex vertices[];
+};
+
+layout(buffer_reference, scalar) readonly buffer RenderItemPtr {
+    RenderItem items[];
+};
+
+layout (location = 0) out vec3 outColor;
+layout (location = 1) out vec2 outUV;
+layout (location = 2) out flat uint outMaterialId;
 
 void main() {
-    gl_Position = vec4(pos[gl_VertexIndex], 1.0);
-    outColor = color[gl_VertexIndex];
+    VertexPtr vBuffer = VertexPtr(pc.vertexBufferAddress);
+    Vertex v = vBuffer.vertices[gl_VertexIndex];
+
+    RenderItemPtr riBuffer = RenderItemPtr(pc.renderItemBufferAddress);
+    RenderItem ri = riBuffer.items[gl_InstanceIndex];
+
+    gl_Position = pc.vp * ri.model * vec4(v.pos, 1.0);
+
+    outColor = v.color;
+    outUV = v.uv;
+    outMaterialId = ri.materialId;
 }
