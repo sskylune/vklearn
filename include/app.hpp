@@ -245,6 +245,12 @@ private:
 
     bool initImGui();
 
+    // Compute pipeline
+    VkPipelineLayout computePipelineLayout = nullptr;
+    VkPipeline computePipeline = nullptr;
+
+    bool createComputePipeline();
+
     // Graphics pipeline
     VkShaderModule createShaderModule(const std::string& filename);
 

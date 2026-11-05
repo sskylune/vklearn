@@ -73,6 +73,11 @@ bool App::init() {
         return false;
     }
 
+    if (!createComputePipeline()) {
+        log.fatal("Failed to create compute pipeline.");
+        return false;
+    }
+
     if (!createGraphicsPipeline()) {
         log.fatal("Failed to create graphics pipeline.");
         return false;
@@ -198,6 +203,9 @@ void App::exit() {
 
     vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
     vkDestroyPipeline(device, pipeline, nullptr);
+
+    vkDestroyPipelineLayout(device, computePipelineLayout, nullptr);
+    vkDestroyPipeline(device, computePipeline, nullptr);
 
     destroySwapchain();
 
@@ -1277,7 +1285,6 @@ bool App::createSyncResources() {
 bool App::createGraphicsPipeline() {
     VkPushConstantRange pushConstantRange {};
     pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    pushConstantRange.offset = 0;
     pushConstantRange.size = sizeof(FrameConstants);
 
     VkPipelineLayoutCreateInfo layoutInfo {};
@@ -1385,6 +1392,49 @@ bool App::createGraphicsPipeline() {
 
     vkDestroyShaderModule(device, vertShader, nullptr);
     vkDestroyShaderModule(device, fragShader, nullptr);
+
+    return true;
+}
+
+bool App::createComputePipeline() {
+    VkPushConstantRange pushConstantRange {};
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pushConstantRange.size = sizeof(FrameConstants);
+
+    VkPipelineLayoutCreateInfo layoutInfo {};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushConstantRange;
+
+    if (vkCreatePipelineLayout(device, &layoutInfo, nullptr, &computePipelineLayout) != VK_SUCCESS) {
+        log.error("createComputePipeline: Failed to create compute pipeline layout.");
+        return false;
+    }
+
+    VkShaderModule computeModule = createShaderModule("build/shader.comp.spv");
+    if (!computeModule) {
+        log.error("createComputePipeline: Failed to create compute shader module.");
+        return false;
+    }
+    const char* entryPoint = "main";
+
+    VkPipelineShaderStageCreateInfo stageInfo {};
+    stageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    stageInfo.module = computeModule;
+    stageInfo.pName = entryPoint;
+
+    VkComputePipelineCreateInfo computeInfo {};
+    computeInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    computeInfo.layout = computePipelineLayout;
+    computeInfo.stage = stageInfo;
+
+    if (vkCreateComputePipelines(device, nullptr, 1, &computeInfo, nullptr, &computePipeline) != VK_SUCCESS) {
+        log.error("createComputePipeline: Failed to create compute pipeline.");
+        return false;
+    }
+
+    vkDestroyShaderModule(device, computeModule, nullptr);
 
     return true;
 }

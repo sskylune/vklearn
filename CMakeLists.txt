@@ -91,6 +91,7 @@ find_program(GLSLC glslc REQUIRED)
 set(SHADER_SOURCES
     src/shaders/shader.vert
     src/shaders/shader.frag
+    src/shaders/shader.comp
 )
 
 set(SPIRV_OUTPUTS "")
