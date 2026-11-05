@@ -4,6 +4,9 @@
 #include <type_traits>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <imgui.h>
+#include <imgui_impl_glfw.h>
+#include <imgui_impl_vulkan.h>
 
 #include <app.hpp>
 #include <tools.hpp>
@@ -57,6 +60,11 @@ bool App::init() {
 
     if (!createSwapchain()) {
         log.fatal("Failed to create swapchain.");
+        return false;
+    }
+
+    if (!initImGui()) {
+        log.fatal("Failed to initialize ImGui.");
         return false;
     }
 
@@ -133,6 +141,12 @@ void App::loop() {
 
 void App::exit() {
     vkDeviceWaitIdle(device);
+
+    ImGui_ImplVulkan_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+
+    vkDestroyDescriptorPool(device, imguiDescPool, nullptr);
 
     vkDestroyDescriptorPool(device, glDescPool, nullptr);
     vkDestroyDescriptorSetLayout(device, glDescSetLayout, nullptr);
@@ -1323,7 +1337,7 @@ bool App::createGraphicsPipeline() {
     renderInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
     renderInfo.colorAttachmentCount = 1;
     renderInfo.pColorAttachmentFormats = &swapchainFormat;
-    renderInfo.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+    renderInfo.depthAttachmentFormat = depthFormat;
 
     VkGraphicsPipelineCreateInfo pipelineInfo {};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -1430,6 +1444,64 @@ VkShaderModule App::createShaderModule(const std::string& filename) {
     return shaderModule;
 }
 
+bool App::initImGui() {
+    uint32_t imguiDescSetsCount = 100;
+
+    VkDescriptorPoolSize poolSize {};
+    poolSize.type = VK_DESCRIPTOR_TYPE_SAMPLER;
+    poolSize.descriptorCount = imguiDescSetsCount;
+
+    VkDescriptorPoolCreateInfo descPoolInfo {};
+    descPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    descPoolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    descPoolInfo.maxSets = imguiDescSetsCount;
+    descPoolInfo.poolSizeCount = 1;
+    descPoolInfo.pPoolSizes = &poolSize;
+
+    if (vkCreateDescriptorPool(device, &descPoolInfo, nullptr, &imguiDescPool) != VK_SUCCESS) {
+        log.error("initIMGUI: Failed to create ImGui descriptor pool.");
+        return false;
+    }
+
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+
+    ImGui::StyleColorsDark();
+
+    ImGui_ImplGlfw_InitForVulkan(window, true);
+
+    VkPipelineRenderingCreateInfo pipelineRenderingInfo {};
+    pipelineRenderingInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    pipelineRenderingInfo.colorAttachmentCount = 1;
+    pipelineRenderingInfo.pColorAttachmentFormats = &swapchainFormat;
+    pipelineRenderingInfo.depthAttachmentFormat = depthFormat;
+
+    ImGui_ImplVulkan_PipelineInfo pipelineInfo {};
+    pipelineInfo.PipelineRenderingCreateInfo = pipelineRenderingInfo;
+    pipelineInfo.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+
+    ImGui_ImplVulkan_InitInfo initInfo {};
+    initInfo.Instance = instance;
+    initInfo.PhysicalDevice = physicalDevice;
+    initInfo.Device = device;
+    initInfo.QueueFamily = gfxQueueIndex;
+    initInfo.Queue = gfxQueue;
+    initInfo.DescriptorPool = imguiDescPool;
+    initInfo.MinImageCount = Config::FRAMES_IN_FLIGHT;
+    initInfo.ImageCount = imageCount;
+    initInfo.UseDynamicRendering = true;
+    initInfo.PipelineInfoMain = pipelineInfo;
+
+    if (!ImGui_ImplVulkan_Init(&initInfo)) {
+        log.error("Failed to initialize ImGui backend.");
+        return false;
+    }
+
+    return true;
+}
+
 void App::destroySwapchain() {
     for (auto& res : swapchainResources) {
         vkDestroyImageView(device, res.imageView, nullptr);
@@ -1475,7 +1547,7 @@ bool App::createSwapchain() {
         return false;
 
     // Swapchain image & image view
-    uint32_t imageCount = 0;
+    imageCount = 0;
     vkGetSwapchainImagesKHR(device, swapchain, &imageCount, nullptr);
     std::vector<VkImage> buffer(imageCount);
     vkGetSwapchainImagesKHR(device, swapchain, &imageCount, buffer.data());
@@ -1506,7 +1578,7 @@ bool App::createSwapchain() {
         VkImageCreateInfo depthInfo {};
         depthInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         depthInfo.imageType = VK_IMAGE_TYPE_2D;
-        depthInfo.format = VK_FORMAT_D32_SFLOAT;
+        depthInfo.format = depthFormat;
         depthInfo.extent = {
             .width = swapchainExtent.width,
             .height = swapchainExtent.height,
@@ -1533,7 +1605,7 @@ bool App::createSwapchain() {
         depthViewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         depthViewInfo.image = swapchainResources[i].depthImage;
         depthViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        depthViewInfo.format = VK_FORMAT_D32_SFLOAT;
+        depthViewInfo.format = depthFormat;
         depthViewInfo.subresourceRange = {
             .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
             .baseMipLevel = 0,

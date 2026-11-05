@@ -214,7 +214,9 @@ private:
     VkFormat swapchainFormat;
     VkColorSpaceKHR swapchainColorSpace;
     VkPresentModeKHR swapchainPresentMode;
+    VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
 
+    uint32_t imageCount = 0;
     struct SwapchainResources {
         VkImage image = nullptr;
         VkImageView imageView = nullptr;
@@ -237,6 +239,11 @@ private:
 
     bool createDescriptorSets();
     void updateTextureDescriptors() const;
+
+    // IMGUI
+    VkDescriptorPool imguiDescPool = nullptr;
+
+    bool initImGui();
 
     // Graphics pipeline
     VkShaderModule createShaderModule(const std::string& filename);
