@@ -96,11 +96,34 @@ void App::loop() {
     bool cursorLocked = true;
     Input::setCursorLocked(cursorLocked);
 
+    static uint32_t frameCount = 0;
+    static float timeAccumulated = 0.0f;
+    static float fps = 0.0f;
+
     while (!glfwWindowShouldClose(window)) {
         Time::update();
 
         Input::update();
         glfwPollEvents();
+
+        // ImGui menu
+        ImGui_ImplVulkan_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+
+        frameCount++;
+        timeAccumulated += Time::deltaTime();
+
+        if (timeAccumulated >= 0.5f) {
+            fps = frameCount / timeAccumulated;
+            timeAccumulated = 0.0f;
+            frameCount = 0;
+        }
+
+        ImDrawList* drawList = ImGui::GetForegroundDrawList();
+        drawList->AddText(ImVec2(20.0f, 20.0f), IM_COL32(255, 255, 255, 255), std::format("FPS: {}", fps).c_str());
+
+        ImGui::Render();
 
         constexpr float maxPitch = 89.99f;
         constexpr float sensitivity = 0.1f;
@@ -409,6 +432,8 @@ void App::render() {
 
     vkCmdBindPipeline(res.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     vkCmdDrawIndexedIndirect(res.commandBuffer, res.mdiBuffer.buffer, 0, drawCount, sizeof(VkDrawIndexedIndirectCommand));
+
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), res.commandBuffer);
 
     vkCmdEndRendering(res.commandBuffer);
 
@@ -1447,16 +1472,17 @@ VkShaderModule App::createShaderModule(const std::string& filename) {
 bool App::initImGui() {
     uint32_t imguiDescSetsCount = 100;
 
-    VkDescriptorPoolSize poolSize {};
-    poolSize.type = VK_DESCRIPTOR_TYPE_SAMPLER;
-    poolSize.descriptorCount = imguiDescSetsCount;
+    std::vector<VkDescriptorPoolSize> poolSizes {
+        { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, IMGUI_IMPL_VULKAN_MINIMUM_SAMPLED_IMAGE_POOL_SIZE },
+        { VK_DESCRIPTOR_TYPE_SAMPLER, IMGUI_IMPL_VULKAN_MINIMUM_SAMPLER_POOL_SIZE },
+    };
 
     VkDescriptorPoolCreateInfo descPoolInfo {};
     descPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     descPoolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     descPoolInfo.maxSets = imguiDescSetsCount;
-    descPoolInfo.poolSizeCount = 1;
-    descPoolInfo.pPoolSizes = &poolSize;
+    descPoolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    descPoolInfo.pPoolSizes = poolSizes.data();
 
     if (vkCreateDescriptorPool(device, &descPoolInfo, nullptr, &imguiDescPool) != VK_SUCCESS) {
         log.error("initIMGUI: Failed to create ImGui descriptor pool.");
@@ -1467,6 +1493,10 @@ bool App::initImGui() {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+
+    ImFontConfig config;
+    config.SizePixels = 24.0f;
+    io.Fonts->AddFontDefault(&config);
 
     ImGui::StyleColorsDark();
 
