@@ -27,7 +27,7 @@ struct Camera {
     glm::vec3 up { 0.0f, 1.0f, 0.0f };
 
     float fov = 90.0f;
-    float nearPlane = 0.1f;
+    float nearPlane = 0.01f;
     float farPlane = 1000.0f;
 
     float yaw = -90.0f;

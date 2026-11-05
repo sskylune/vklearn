@@ -37,5 +37,11 @@ void main() {
     Material mat = matBuffer.materials[inMaterialID];
 
     vec4 texColor = texture(textures[mat.textureId], inUV);
-    fragColor = texColor * mat.baseColor * vec4(inColor, 1.0);
+    vec4 finalColor = texColor * mat.baseColor * vec4(inColor, 1.0);
+
+    if (finalColor.a < 0.5) {
+        discard;
+    }
+
+    fragColor = finalColor;
 }

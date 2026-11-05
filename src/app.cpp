@@ -125,7 +125,7 @@ void App::loop() {
         }
 
         speed += Input::scroll() * 5.0f;
-        speed = std::clamp(speed, 1.0f, 100.0f);
+        speed = std::clamp(speed, 0.1f, 100.0f);
 
         render();
     }
@@ -240,6 +240,11 @@ void App::render() {
     proj[1][1] *= -1.0f;
     glm::mat4 vp = proj * view;
 
+    glm::mat4 rootTransform { 1.0f };
+    float time = static_cast<float>(glfwGetTime());
+    rootTransform *= glm::rotate(glm::mat4 { 1.0f }, time * 10, glm::vec3 { 0.0f, 1.0f, 0.0f });
+    rootTransform *= glm::translate(glm::mat4 { 1.0f }, glm::vec3(0.0f, sin(time * 8) * 2, 0.0f));
+
     uint32_t drawCount = 0;
 
     for (auto& node : nodes) {
@@ -248,7 +253,7 @@ void App::render() {
             const Node& parent = nodes[node.parentId];
             node.worldMtx = parent.worldMtx * node.localMtx;
         } else {
-            node.worldMtx = node.localMtx;
+            node.worldMtx = rootTransform * node.localMtx;
         }
 
         // Recording buffers
