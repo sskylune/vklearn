@@ -413,12 +413,31 @@ void App::render() {
     frameConsts.renderItemBufferAddress = res.renderItemBuffer.deviceAddress;
     frameConsts.vp = vp;
 
+    vkCmdPushConstants(res.commandBuffer, computePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(frameConsts), &frameConsts);
     vkCmdPushConstants(
         res.commandBuffer, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(frameConsts), &frameConsts);
 
     // Index buffer
     GPUbuffer& indexBuffer = gpuBuffers[indexBufferId - 1];
     vkCmdBindIndexBuffer(res.commandBuffer, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+
+    // Compute shader
+    vkCmdBindPipeline(res.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline);
+    vkCmdDispatch(res.commandBuffer, 64, 1, 1);
+
+    VkMemoryBarrier2 computeBarrier {};
+    computeBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+    computeBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    computeBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+    computeBarrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+    computeBarrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+
+    VkDependencyInfo compDepInfo {};
+    compDepInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    compDepInfo.memoryBarrierCount = 1;
+    compDepInfo.pMemoryBarriers = &computeBarrier;
+
+    vkCmdPipelineBarrier2(res.commandBuffer, &compDepInfo);
 
     vkCmdBeginRendering(res.commandBuffer, &renderInfo);
 
