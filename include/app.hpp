@@ -62,12 +62,21 @@ struct Node {
     int32_t meshId = -1;
 };
 
+struct AABB {
+    glm::vec3 min { 0.0f };
+    glm::vec3 max { 0.0f };
+};
+
 struct Primitive {
     uint64_t vertexStart = 0;
     uint64_t vertexCount = 0;
     uint64_t indexStart = 0;
     uint64_t indexCount = 0;
     uint32_t materialId = 0;
+    AABB AABB {
+        glm::vec3 { 0.0f },
+        glm::vec3 { 0.0f },
+    };
 };
 
 struct Mesh {
@@ -105,8 +114,19 @@ struct Image {
     std::byte* data;
 };
 
+struct RenderObject {
+    // Render Item
+    glm::mat4 world { 1.0f };
+    uint32_t materialId = 0;
+
+    // MDI
+    uint32_t indexCount = 0;
+    uint32_t firstIndex = 0;
+    int32_t vertexOffset = 0;
+};
+
 struct RenderItem {
-    glm::mat4 model { 1.0f };
+    glm::mat4 world { 1.0f };
     uint32_t materialId = -1;
 };
 
@@ -119,11 +139,24 @@ struct FrameResources {
 
     // MDI buffer
     GPUbuffer mdiBuffer;
-    VkDrawIndexedIndirectCommand* mdiBufferPtr = nullptr;
 
     // Render item buffer
     GPUbuffer renderItemBuffer;
-    RenderItem* renderItemBufferPtr = nullptr;
+
+    // Render object buffer
+    GPUbuffer renderObjectBuffer;
+    RenderObject* renderObjectBufferPtr = nullptr;
+
+    // Atomic counter buffer
+    GPUbuffer counterBuffer;
+};
+
+struct ComputeConstants {
+    uint64_t renderItemBufferAddress = 0;
+    uint64_t mdiBufferAddress = 0;
+    uint64_t renderObjectBufferAddress = 0;
+    uint64_t atomicBufferCounterAddress = 0;
+    uint32_t totalObjects = 0;
 };
 
 struct FrameConstants {
@@ -172,8 +205,8 @@ private:
     // Debug
     Log log;
 
-    static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-        VkDebugUtilsMessageTypeFlagsEXT messageType, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData);
+    static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, VkDebugUtilsMessageTypeFlagsEXT messageType,
+        const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData);
 
     // GLFW window
     static void glfwFramebufferSizeCallback(GLFWwindow* window, int width, int height);
@@ -265,6 +298,7 @@ private:
 
     bool createSyncResources();
     bool initFrameResources();
+    void freeFrameResources();
 
     // Render
     uint64_t frameIndex = 0;

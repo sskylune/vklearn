@@ -14,7 +14,7 @@ struct Vertex {
 };
 
 struct RenderItem {
-    mat4 model;
+    mat4 world;
     uint materialId;
 };
 
@@ -50,7 +50,7 @@ void main() {
     RenderItemPtr riBuffer = RenderItemPtr(pc.renderItemBufferAddress);
     RenderItem ri = riBuffer.items[gl_InstanceIndex];
 
-    gl_Position = pc.vp * ri.model * vec4(v.pos, 1.0);
+    gl_Position = pc.vp * ri.world * vec4(v.pos, 1.0);
 
     outColor = v.color;
     outUV = v.uv;

@@ -185,21 +185,7 @@ void App::exit() {
 
     vkDestroySemaphore(device, timelineSemaphore, nullptr);
 
-    for (auto& res : frameResources) {
-        vkDestroyCommandPool(device, res.commandPool, nullptr);
-        vkDestroySemaphore(device, res.imageAcquiredSemaphore, nullptr);
-        vkDestroySemaphore(device, res.renderFinishedSemaphore, nullptr);
-
-        // MDI
-        vmaUnmapMemory(vmaAllocator, res.mdiBuffer.allocation);
-        vmaDestroyBuffer(vmaAllocator, res.mdiBuffer.buffer, res.mdiBuffer.allocation);
-        res.mdiBufferPtr = nullptr;
-
-        // Render item
-        vmaUnmapMemory(vmaAllocator, res.renderItemBuffer.allocation);
-        vmaDestroyBuffer(vmaAllocator, res.renderItemBuffer.buffer, res.renderItemBuffer.allocation);
-        res.renderItemBufferPtr = nullptr;
-    }
+    freeFrameResources();
 
     vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
     vkDestroyPipeline(device, pipeline, nullptr);
@@ -290,7 +276,7 @@ void App::render() {
     rootTransform *= glm::rotate(glm::mat4 { 1.0f }, time * 10, glm::vec3 { 0.0f, 1.0f, 0.0f });
     rootTransform *= glm::translate(glm::mat4 { 1.0f }, glm::vec3(0.0f, sin(time * 8) * 2, 0.0f));
 
-    uint32_t drawCount = 0;
+    uint32_t totalObjects = 0;
 
     for (auto& node : nodes) {
         // Calculating world matrices
@@ -306,24 +292,16 @@ void App::render() {
             const auto& mesh = meshes[node.meshId];
 
             for (const auto& prim : mesh.primitives) {
-                // MDI command
-                VkDrawIndexedIndirectCommand command {};
-                command.indexCount = static_cast<uint32_t>(prim.indexCount);
-                command.instanceCount = 1;
-                command.firstIndex = static_cast<uint32_t>(prim.indexStart);
-                command.vertexOffset = static_cast<uint32_t>(prim.vertexStart);
-                command.firstInstance = drawCount;
+                RenderObject ro;
+                ro.world = node.worldMtx;
+                ro.materialId = prim.materialId;
+                ro.indexCount = static_cast<uint32_t>(prim.indexCount);
+                ro.firstIndex = static_cast<uint32_t>(prim.indexStart);
+                ro.vertexOffset = static_cast<uint32_t>(prim.vertexStart);
 
-                res.mdiBufferPtr[drawCount] = command;
+                res.renderObjectBufferPtr[totalObjects] = ro;
 
-                // Render items
-                RenderItem renderItem {};
-                renderItem.model = node.worldMtx;
-                renderItem.materialId = prim.materialId;
-
-                res.renderItemBufferPtr[drawCount] = renderItem;
-
-                drawCount++;
+                totalObjects++;
             }
         }
     }
@@ -405,32 +383,61 @@ void App::render() {
     vkCmdBindDescriptorSets(res.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &glDescSet, 0, nullptr);
 
     // Push constants
-    FrameConstants frameConsts;
+    ComputeConstants cc;
+    cc.renderItemBufferAddress = res.renderItemBuffer.deviceAddress;
+    cc.mdiBufferAddress = res.mdiBuffer.deviceAddress;
+    cc.renderObjectBufferAddress = res.renderObjectBuffer.deviceAddress;
+    cc.atomicBufferCounterAddress = res.counterBuffer.deviceAddress;
+    cc.totalObjects = totalObjects;
+
+    vkCmdPushConstants(res.commandBuffer, computePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(cc), &cc);
+
+    FrameConstants fc;
     GPUbuffer& vertBuffer = gpuBuffers[vertexBufferId - 1];
     GPUbuffer& matBuffer = gpuBuffers[materialBufferId - 1];
-    frameConsts.vertexBufferAddress = vertBuffer.deviceAddress;
-    frameConsts.materialBufferAddress = matBuffer.deviceAddress;
-    frameConsts.renderItemBufferAddress = res.renderItemBuffer.deviceAddress;
-    frameConsts.vp = vp;
+    fc.vertexBufferAddress = vertBuffer.deviceAddress;
+    fc.materialBufferAddress = matBuffer.deviceAddress;
+    fc.renderItemBufferAddress = res.renderItemBuffer.deviceAddress;
+    fc.vp = vp;
 
-    vkCmdPushConstants(res.commandBuffer, computePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(frameConsts), &frameConsts);
-    vkCmdPushConstants(
-        res.commandBuffer, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(frameConsts), &frameConsts);
+    vkCmdPushConstants(res.commandBuffer, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(fc), &fc);
 
     // Index buffer
     GPUbuffer& indexBuffer = gpuBuffers[indexBufferId - 1];
     vkCmdBindIndexBuffer(res.commandBuffer, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 
+    // Reset compute shader atomic counter
+    vkCmdFillBuffer(res.commandBuffer, res.counterBuffer.buffer, 0, sizeof(uint32_t), 0);
+
+    VkBufferMemoryBarrier2 counterBufferBarrier {};
+    counterBufferBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+    counterBufferBarrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    counterBufferBarrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    counterBufferBarrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    counterBufferBarrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+    counterBufferBarrier.buffer = res.counterBuffer.buffer;
+    counterBufferBarrier.size = VK_WHOLE_SIZE;
+
+    VkDependencyInfo counterBarrierDepInfo {};
+    counterBarrierDepInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    counterBarrierDepInfo.bufferMemoryBarrierCount = 1;
+    counterBarrierDepInfo.pBufferMemoryBarriers = &counterBufferBarrier;
+
+    vkCmdPipelineBarrier2(res.commandBuffer, &counterBarrierDepInfo);
+
     // Compute shader
     vkCmdBindPipeline(res.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline);
-    vkCmdDispatch(res.commandBuffer, 64, 1, 1);
+    if (totalObjects > 0) {
+        uint32_t groupCount = (totalObjects + 63) / 64;
+        vkCmdDispatch(res.commandBuffer, groupCount, 1, 1);
+    }
 
     VkMemoryBarrier2 computeBarrier {};
     computeBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
     computeBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
     computeBarrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-    computeBarrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
-    computeBarrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+    computeBarrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+    computeBarrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
 
     VkDependencyInfo compDepInfo {};
     compDepInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
@@ -458,7 +465,8 @@ void App::render() {
     vkCmdSetScissor(res.commandBuffer, 0, 1, &scissor);
 
     vkCmdBindPipeline(res.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    vkCmdDrawIndexedIndirect(res.commandBuffer, res.mdiBuffer.buffer, 0, drawCount, sizeof(VkDrawIndexedIndirectCommand));
+    vkCmdDrawIndexedIndirectCount(
+        res.commandBuffer, res.mdiBuffer.buffer, 0, res.counterBuffer.buffer, 0, Config::MAX_RENDER_ITEMS, sizeof(VkDrawIndexedIndirectCommand));
 
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), res.commandBuffer);
 
@@ -596,8 +604,8 @@ bool App::loadData() {
     }
 
     // Vertex buffer
-    GPUbuffer vertexBuffer = createBuffer(
-        VK_BUFFER_USAGE_2_TRANSFER_DST_BIT | VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT, vertexBufferBytes, false, VMA_MEMORY_USAGE_AUTO);
+    GPUbuffer vertexBuffer =
+        createBuffer(VK_BUFFER_USAGE_2_TRANSFER_DST_BIT | VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT, vertexBufferBytes, false, VMA_MEMORY_USAGE_AUTO);
     if (!vertexBuffer.buffer) {
         log.error("Failed to create vertex buffer.");
         return false;
@@ -655,8 +663,8 @@ bool App::loadData() {
 
     // Material buffer
     const size_t materialDataBytes = materials.size() * sizeof(Material);
-    GPUbuffer materialBuffer = createBuffer(
-        VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT, materialDataBytes, true, VMA_MEMORY_USAGE_AUTO);
+    GPUbuffer materialBuffer =
+        createBuffer(VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT, materialDataBytes, true, VMA_MEMORY_USAGE_AUTO);
     if (!materialBuffer.buffer) {
         log.error("Failed to create material buffer.");
         return false;
@@ -831,6 +839,10 @@ std::vector<uint32_t> App::loadMeshes(const tg3_model& model, const std::vector<
                     assert(vertexOffset + acc.count <= vertices.size() && "Not enough space for vertices.");
 
                     mesh.primitives[j].vertexCount = acc.count;
+                    mesh.primitives[j].AABB = {
+                        glm::vec3 { acc.min_values[0], acc.min_values[1], acc.min_values[2] },
+                        glm::vec3 { acc.max_values[0], acc.max_values[1], acc.max_values[2] },
+                    };
                     writeAttribute(&Vertex::pos, attribute);
                 }
                 if (key == "NORMAL") {
@@ -892,9 +904,8 @@ std::vector<uint32_t> App::loadMaterials(const tg3_model& model, const std::vect
             .baseColor = glm::vec4(material.pbr_metallic_roughness.base_color_factor[0], material.pbr_metallic_roughness.base_color_factor[1],
                 material.pbr_metallic_roughness.base_color_factor[2], material.pbr_metallic_roughness.base_color_factor[3]),
             // TODO
-            .textureId = material.pbr_metallic_roughness.base_color_texture.index != -1
-                             ? textureIds[material.pbr_metallic_roughness.base_color_texture.index] - 1
-                             : 0,
+            .textureId =
+                material.pbr_metallic_roughness.base_color_texture.index != -1 ? textureIds[material.pbr_metallic_roughness.base_color_texture.index] - 1 : 0,
         });
 
         materialIds[i] = materials.size() - 1;
@@ -1220,6 +1231,28 @@ bool App::createTransientCommandPool() {
     return true;
 }
 
+void App::freeFrameResources() {
+    for (auto& res : frameResources) {
+        vkDestroyCommandPool(device, res.commandPool, nullptr);
+        vkDestroySemaphore(device, res.imageAcquiredSemaphore, nullptr);
+        vkDestroySemaphore(device, res.renderFinishedSemaphore, nullptr);
+
+        // MDI buffer
+        vmaDestroyBuffer(vmaAllocator, res.mdiBuffer.buffer, res.mdiBuffer.allocation);
+
+        // Render item buffer
+        vmaDestroyBuffer(vmaAllocator, res.renderItemBuffer.buffer, res.renderItemBuffer.allocation);
+
+        // Render object buffer
+        vmaUnmapMemory(vmaAllocator, res.renderObjectBuffer.allocation);
+        vmaDestroyBuffer(vmaAllocator, res.renderObjectBuffer.buffer, res.renderObjectBuffer.allocation);
+        res.renderObjectBufferPtr = nullptr;
+
+        // Atomic counter buffer
+        vmaDestroyBuffer(vmaAllocator, res.counterBuffer.buffer, res.counterBuffer.allocation);
+    }
+}
+
 bool App::initFrameResources() {
     for (auto& res : frameResources) {
         VkCommandPoolCreateInfo poolInfo {};
@@ -1258,26 +1291,31 @@ bool App::initFrameResources() {
 
         // MDI
         const size_t mdiBufferSize = Config::MAX_RENDER_ITEMS * sizeof(VkDrawIndexedIndirectCommand);
-        res.mdiBuffer = createBuffer(VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, mdiBufferSize, true, VMA_MEMORY_USAGE_AUTO);
-
-        void* mdiBufferPtr = nullptr;
-        if (vmaMapMemory(vmaAllocator, res.mdiBuffer.allocation, &mdiBufferPtr) != VK_SUCCESS) {
-            log.fatal("Failed to map MDI buffer.");
-            return false;
-        }
-        res.mdiBufferPtr = reinterpret_cast<VkDrawIndexedIndirectCommand*>(mdiBufferPtr);
+        VkBufferUsageFlagBits2 mdiBufferFlags =
+            VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+        res.mdiBuffer = createBuffer(mdiBufferFlags, mdiBufferSize, false, VMA_MEMORY_USAGE_AUTO);
 
         // Render item buffer
         const size_t renderItemBufferSize = Config::MAX_RENDER_ITEMS * sizeof(RenderItem);
         res.renderItemBuffer = createBuffer(
-            VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT, renderItemBufferSize, true, VMA_MEMORY_USAGE_AUTO);
+            VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT, renderItemBufferSize, false, VMA_MEMORY_USAGE_AUTO);
 
-        void* renderItemBufferPtr = nullptr;
-        if (vmaMapMemory(vmaAllocator, res.renderItemBuffer.allocation, &renderItemBufferPtr) != VK_SUCCESS) {
-            log.fatal("Failed to map render item buffer.");
+        // Render object buffer
+        const size_t renderObjectBufferSize = Config::MAX_RENDER_ITEMS * sizeof(RenderObject);
+        VkBufferUsageFlagBits2 renderObjectBufferFlags = VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT;
+        res.renderObjectBuffer = createBuffer(renderObjectBufferFlags, renderObjectBufferSize, true, VMA_MEMORY_USAGE_AUTO);
+
+        void* renderObjectBufferPtr = nullptr;
+        if (vmaMapMemory(vmaAllocator, res.renderObjectBuffer.allocation, &renderObjectBufferPtr) != VK_SUCCESS) {
+            log.fatal("Failed to map render object buffer.");
             return false;
         }
-        res.renderItemBufferPtr = reinterpret_cast<RenderItem*>(renderItemBufferPtr);
+        res.renderObjectBufferPtr = reinterpret_cast<RenderObject*>(renderObjectBufferPtr);
+
+        // Atomic buffer
+        VkBufferUsageFlagBits2 counterBufferFlags = VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT |
+                                                    VK_BUFFER_USAGE_2_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT;
+        res.counterBuffer = createBuffer(counterBufferFlags, sizeof(uint32_t), false, VMA_MEMORY_USAGE_AUTO);
     }
 
     return true;
@@ -1694,8 +1732,8 @@ bool App::createSwapchain() {
         allocInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
         allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 
-        if (vmaCreateImage(vmaAllocator, &depthInfo, &allocInfo, &swapchainResources[i].depthImage, &swapchainResources[i].depthAllocation,
-                nullptr) != VK_SUCCESS) {
+        if (vmaCreateImage(vmaAllocator, &depthInfo, &allocInfo, &swapchainResources[i].depthImage, &swapchainResources[i].depthAllocation, nullptr) !=
+            VK_SUCCESS) {
             log.fatal("Failed to allocate depth buffer.");
             return false;
         }
@@ -1767,6 +1805,7 @@ bool App::createDevice() {
     VkPhysicalDeviceVulkan12Features features12 {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
         .pNext = &features13,
+        .drawIndirectCount = VK_TRUE,
         .descriptorIndexing = VK_TRUE,
         .shaderInputAttachmentArrayDynamicIndexing = VK_TRUE,
         .shaderUniformBufferArrayNonUniformIndexing = VK_TRUE,
@@ -1947,8 +1986,8 @@ bool App::createVulkanInstance() {
     // Debug messenger
     VkDebugUtilsMessengerCreateInfoEXT debugInfo {};
     debugInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-    debugInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
-                                VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+    debugInfo.messageSeverity =
+        VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
     debugInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
     debugInfo.pfnUserCallback = debugCallback;
     debugInfo.pUserData = &log;

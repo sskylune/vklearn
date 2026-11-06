@@ -2,7 +2,7 @@ BasedOnStyle: LLVM
 IndentWidth: 4
 TabWidth: 4
 UseTab: Never
-ColumnLimit: 150
+ColumnLimit: 160
 PointerAlignment: Left
 AccessModifierOffset: -4
 
