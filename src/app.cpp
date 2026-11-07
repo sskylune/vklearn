@@ -125,8 +125,11 @@ void App::loop() {
             frameCount = 0;
         }
 
+        unsigned int textColor = IM_COL32(255, 255, 255, 255); // White
+
         ImDrawList* drawList = ImGui::GetForegroundDrawList();
-        drawList->AddText(ImVec2(20.0f, 20.0f), IM_COL32(255, 255, 255, 255), std::format("FPS: {}", fps).c_str());
+        drawList->AddText(ImVec2(20.0f, 20.0f), textColor, std::format("FPS: {}", fps).c_str());
+        drawList->AddText(ImVec2(20.0f, 40.0f), textColor, std::format("Draw Objects: {}", drawObjectsCount).c_str());
 
         ImGui::Render();
 
@@ -271,11 +274,6 @@ void App::render() {
     proj[1][1] *= -1.0f;
     glm::mat4 vp = proj * view;
 
-    glm::mat4 rootTransform { 1.0f };
-    float time = static_cast<float>(glfwGetTime());
-    rootTransform *= glm::rotate(glm::mat4 { 1.0f }, time * 10, glm::vec3 { 0.0f, 1.0f, 0.0f });
-    rootTransform *= glm::translate(glm::mat4 { 1.0f }, glm::vec3(0.0f, sin(time * 8) * 2, 0.0f));
-
     uint32_t totalObjects = 0;
 
     for (auto& node : nodes) {
@@ -284,7 +282,7 @@ void App::render() {
             const Node& parent = nodes[node.parentId];
             node.worldMtx = parent.worldMtx * node.localMtx;
         } else {
-            node.worldMtx = rootTransform * node.localMtx;
+            node.worldMtx = node.localMtx;
         }
 
         // Recording buffers
@@ -434,6 +432,8 @@ void App::render() {
         uint32_t groupCount = (totalObjects + 63) / 64;
         vkCmdDispatch(res.commandBuffer, groupCount, 1, 1);
     }
+
+    drawObjectsCount = *res.counterPtr;
 
     VkMemoryBarrier2 computeBarrier {};
     computeBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
@@ -1252,6 +1252,7 @@ void App::freeFrameResources() {
         res.renderObjectBufferPtr = nullptr;
 
         // Atomic counter buffer
+        vmaUnmapMemory(vmaAllocator, res.counterBuffer.allocation);
         vmaDestroyBuffer(vmaAllocator, res.counterBuffer.buffer, res.counterBuffer.allocation);
     }
 }
@@ -1318,7 +1319,14 @@ bool App::initFrameResources() {
         // Atomic buffer
         VkBufferUsageFlagBits2 counterBufferFlags = VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT |
                                                     VK_BUFFER_USAGE_2_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT;
-        res.counterBuffer = createBuffer(counterBufferFlags, sizeof(uint32_t), false, VMA_MEMORY_USAGE_AUTO);
+        res.counterBuffer = createBuffer(counterBufferFlags, sizeof(uint32_t), true, VMA_MEMORY_USAGE_AUTO);
+
+        void* counterPtr = nullptr;
+        if (vmaMapMemory(vmaAllocator, res.counterBuffer.allocation, &counterPtr) != VK_SUCCESS) {
+            log.fatal("Failed to map counter buffer.");
+            return false;
+        }
+        res.counterPtr = reinterpret_cast<uint32_t*>(counterPtr);
     }
 
     return true;

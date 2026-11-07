@@ -153,6 +153,7 @@ struct FrameResources {
 
     // Atomic counter buffer
     GPUbuffer counterBuffer;
+    uint32_t* counterPtr = nullptr;
 };
 
 struct ComputeConstants {
@@ -298,8 +299,9 @@ private:
 
     // Synchronization
     std::array<FrameResources, Config::FRAMES_IN_FLIGHT> frameResources;
-
     VkSemaphore timelineSemaphore = nullptr;
+
+    uint32_t drawObjectsCount = 0;
 
     bool createSyncResources();
     bool initFrameResources();
