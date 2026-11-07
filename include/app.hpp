@@ -73,7 +73,7 @@ struct Primitive {
     uint64_t indexStart = 0;
     uint64_t indexCount = 0;
     uint32_t materialId = 0;
-    AABB AABB {
+    AABB aabb {
         glm::vec3 { 0.0f },
         glm::vec3 { 0.0f },
     };
@@ -115,7 +115,11 @@ struct Image {
 };
 
 struct RenderObject {
-    // Render Item
+    // Render Item & frustum culling
+    AABB aabb {
+        glm::vec3 { 0.0f },
+        glm::vec3 { 0.0f },
+    };
     glm::mat4 world { 1.0f };
     uint32_t materialId = 0;
 
@@ -156,6 +160,7 @@ struct ComputeConstants {
     uint64_t mdiBufferAddress = 0;
     uint64_t renderObjectBufferAddress = 0;
     uint64_t atomicBufferCounterAddress = 0;
+    glm::mat4 vp { 1.0f };
     uint32_t totalObjects = 0;
 };
 

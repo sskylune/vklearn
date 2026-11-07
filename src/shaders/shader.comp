@@ -27,7 +27,13 @@ layout(buffer_reference, scalar) buffer RenderItemPtr {
     RenderItem items[];
 };
 
+struct AABB {
+    vec3 min;
+    vec3 max;
+};
+
 struct RenderObject {
+    AABB aabb;
     mat4 world;
     uint materialId;
 
@@ -49,12 +55,37 @@ layout(push_constant, scalar) uniform ComputeConstants {
     uint64_t mdiBufferAddress;
     uint64_t renderObjectBufferAddress;
     uint64_t atomicBufferCounterAddress;
+    mat4 vp;
     uint totalObjects;
 } pc;
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
-bool checkFrustum() {
+bool checkFrustum(AABB aabb, mat4 world, mat4 vp) {
+    mat4 vpt = transpose(vp);
+    vec4 planes[6];
+    planes[0] = vpt[3] + vpt[0]; // Left
+    planes[1] = vpt[3] - vpt[0]; // Right
+    planes[2] = vpt[3] + vpt[1]; // Bottom
+    planes[3] = vpt[3] - vpt[1]; // Top
+    planes[4] = vpt[2];          // Near
+    planes[5] = vpt[3] - vpt[2]; // Far
+
+    for (int i = 0; i < 6; ++i) {
+        vec4 localPlane = planes[i] * world;
+
+        float len = length(localPlane.xyz);
+        localPlane /= len;
+
+        vec3 normal = localPlane.xyz;
+
+        vec3 p = mix(aabb.min, aabb.max, greaterThan(normal, vec3(0.0)));
+
+        if (dot(normal, p) + localPlane.w < 0.0) {
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -69,10 +100,9 @@ void main() {
 
     RenderObject obj = roBuffer.objects[i];
     
-    bool isVisible = checkFrustum();
+    bool isVisible = checkFrustum(obj.aabb, obj.world, pc.vp);
 
     if (isVisible) {
-        // TODO: atomicAdd()
         uint drawIdx = atomicAdd(counterBuffer.counter, 1);
 
         // MDI command

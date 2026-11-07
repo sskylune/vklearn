@@ -293,6 +293,8 @@ void App::render() {
 
             for (const auto& prim : mesh.primitives) {
                 RenderObject ro;
+                ro.aabb.min = prim.aabb.min;
+                ro.aabb.max = prim.aabb.max;
                 ro.world = node.worldMtx;
                 ro.materialId = prim.materialId;
                 ro.indexCount = static_cast<uint32_t>(prim.indexCount);
@@ -388,6 +390,7 @@ void App::render() {
     cc.mdiBufferAddress = res.mdiBuffer.deviceAddress;
     cc.renderObjectBufferAddress = res.renderObjectBuffer.deviceAddress;
     cc.atomicBufferCounterAddress = res.counterBuffer.deviceAddress;
+    cc.vp = vp;
     cc.totalObjects = totalObjects;
 
     vkCmdPushConstants(res.commandBuffer, computePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(cc), &cc);
@@ -839,7 +842,7 @@ std::vector<uint32_t> App::loadMeshes(const tg3_model& model, const std::vector<
                     assert(vertexOffset + acc.count <= vertices.size() && "Not enough space for vertices.");
 
                     mesh.primitives[j].vertexCount = acc.count;
-                    mesh.primitives[j].AABB = {
+                    mesh.primitives[j].aabb = {
                         glm::vec3 { acc.min_values[0], acc.min_values[1], acc.min_values[2] },
                         glm::vec3 { acc.max_values[0], acc.max_values[1], acc.max_values[2] },
                     };
@@ -1456,7 +1459,7 @@ bool App::createGraphicsPipeline() {
 bool App::createComputePipeline() {
     VkPushConstantRange pushConstantRange {};
     pushConstantRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    pushConstantRange.size = sizeof(FrameConstants);
+    pushConstantRange.size = sizeof(ComputeConstants);
 
     VkPipelineLayoutCreateInfo layoutInfo {};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
